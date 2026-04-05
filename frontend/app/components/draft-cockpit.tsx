@@ -234,6 +234,39 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
     writeStoredRole(role);
   }, [role]);
 
+  useEffect(() => {
+    function handleOffline() {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      if (
+        socketRef.current?.readyState === WebSocket.OPEN ||
+        socketRef.current?.readyState === WebSocket.CONNECTING
+      ) {
+        socketRef.current.close();
+      }
+      setConnectionStatus("offline");
+    }
+
+    function handleOnline() {
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        return;
+      }
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      setConnectionStatus("reconnecting");
+      setSocketNonce((current) => current + 1);
+    }
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
+
   async function refreshSidePanels(currentDraftId: number, currentRole: UserRole = role) {
     const [snapshotsResult, assistantRunsResult, collaboratorsResult, membersResult] =
       await Promise.allSettled([
@@ -399,14 +432,17 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
     socket.onmessage = handleSocketMessage;
     socket.onerror = () => {
       if (!cancelled) {
-        setConnectionStatus("error");
+        setConnectionStatus(window.navigator.onLine ? "error" : "offline");
       }
     };
     socket.onclose = () => {
       if (cancelled) {
         return;
       }
-      setConnectionStatus("reconnecting");
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      setConnectionStatus(window.navigator.onLine ? "reconnecting" : "offline");
       reconnectTimerRef.current = setTimeout(() => {
         setSocketNonce((current) => current + 1);
       }, 1200);
@@ -707,7 +743,9 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
                 >
                   Back to board
                 </Link>
-                <span className="signal-pill">{connectionLabel(connectionStatus)}</span>
+                <span data-testid="connection-status" className="signal-pill">
+                  {connectionLabel(connectionStatus)}
+                </span>
                 <span className="signal-pill">{draft ? stageLabel(draft.stage) : stageLabel(stage)}</span>
                 <span className="signal-pill">{draft?.my_role ?? role}</span>
               </div>
@@ -741,12 +779,24 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
           </div>
         </header>
 
-        {error ? <div className="notice-card notice-error">{error}</div> : null}
-        {saveMessage ? <div className="notice-card notice-success">{saveMessage}</div> : null}
-        {remoteNotice ? <div className="notice-card notice-info">{remoteNotice}</div> : null}
+        {error ? (
+          <div data-testid="draft-error" className="notice-card notice-error">
+            {error}
+          </div>
+        ) : null}
+        {saveMessage ? (
+          <div data-testid="save-message" className="notice-card notice-success">
+            {saveMessage}
+          </div>
+        ) : null}
+        {remoteNotice ? (
+          <div data-testid="remote-notice" className="notice-card notice-info">
+            {remoteNotice}
+          </div>
+        ) : null}
 
         <section className="grid gap-6 2xl:grid-cols-[280px,minmax(0,1fr),360px]">
-          <aside className="glass-panel rounded-[1.9rem] p-5">
+          <aside data-testid="live-room" className="glass-panel rounded-[1.9rem] p-5">
             <div className="section-kicker">Live room</div>
             <div className="mt-3 space-y-3">
               {presence.length === 0 ? (
@@ -755,6 +805,7 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
                 presence.map((participant) => (
                   <div
                     key={participant.id}
+                    data-testid={`presence-card-${participant.memberId}`}
                     className="flex items-center justify-between rounded-[1.2rem] border border-[rgba(34,39,46,0.08)] bg-[rgba(255,255,255,0.66)] px-3 py-3"
                   >
                     <div>
@@ -778,6 +829,7 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
               <div className="grid gap-2">
                 {(["md", "txt", "json"] as const).map((format) => (
                   <button
+                    data-testid={`export-${format}`}
                     key={format}
                     type="button"
                     onClick={() => void handleExport(format)}
@@ -933,7 +985,11 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
                   {selectedText ? getExcerpt(selectedText, 180) : "Select a passage to send context into the assistant."}
                 </div>
 
-                {assistantError ? <div className="notice-card notice-error">{assistantError}</div> : null}
+                {assistantError ? (
+                  <div data-testid="assistant-error" className="notice-card notice-error">
+                    {assistantError}
+                  </div>
+                ) : null}
 
                 <button
                   type="button"
@@ -945,7 +1001,10 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
                 </button>
 
                 {assistantResult ? (
-                  <div className="space-y-3 rounded-[1.5rem] border border-[rgba(34,39,46,0.08)] bg-[rgba(255,255,255,0.78)] p-4">
+                  <div
+                    data-testid="assistant-suggestion"
+                    className="space-y-3 rounded-[1.5rem] border border-[rgba(34,39,46,0.08)] bg-[rgba(255,255,255,0.78)] p-4"
+                  >
                     <div className="text-sm font-semibold text-slate-900">Suggestion</div>
                     <textarea
                       value={assistantResult}
@@ -986,12 +1045,14 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
               <div className="mt-4 grid gap-3">
                 <div className="flex gap-2">
                   <input
+                    data-testid="snapshot-label-input"
                     value={snapshotLabel}
                     onChange={(event) => setSnapshotLabel(event.target.value)}
                     placeholder="Checkpoint label"
                     className="field"
                   />
                   <button
+                    data-testid="snapshot-save-button"
                     type="button"
                     onClick={() => void handleCreateSnapshot()}
                     disabled={!canCreateSnapshots(role)}
@@ -1001,13 +1062,22 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
                   </button>
                 </div>
 
-                {sidebarMessage ? <div className="notice-card notice-success">{sidebarMessage}</div> : null}
-                {sidebarError ? <div className="notice-card notice-error">{sidebarError}</div> : null}
+                {sidebarMessage ? (
+                  <div data-testid="sidebar-message" className="notice-card notice-success">
+                    {sidebarMessage}
+                  </div>
+                ) : null}
+                {sidebarError ? (
+                  <div data-testid="sidebar-error" className="notice-card notice-error">
+                    {sidebarError}
+                  </div>
+                ) : null}
 
                 <div className="space-y-3">
                   {snapshots.map((snapshot) => (
                     <div
                       key={snapshot.id}
+                      data-testid={`snapshot-card-${snapshot.id}`}
                       className="rounded-[1.2rem] border border-[rgba(34,39,46,0.08)] bg-[rgba(255,255,255,0.66)] p-3"
                     >
                       <div className="flex items-start justify-between gap-3">
@@ -1021,6 +1091,7 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
                         </div>
                         {canRestoreSnapshots(role) ? (
                           <button
+                            data-testid={`restore-snapshot-${snapshot.id}`}
                             type="button"
                             onClick={() => void handleRestoreSnapshot(snapshot.id)}
                             className="button-ghost rounded-full px-3 py-2 text-xs font-semibold"

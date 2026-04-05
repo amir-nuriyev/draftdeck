@@ -284,7 +284,10 @@ export default function WorkspaceBoard() {
                 </label>
               </div>
 
-              <div className="mt-5 rounded-[1.3rem] border border-[rgba(34,39,46,0.08)] bg-[rgba(255,255,255,0.65)] p-4 text-sm leading-7 text-slate-600">
+              <div
+                data-testid="session-summary"
+                className="mt-5 rounded-[1.3rem] border border-[rgba(34,39,46,0.08)] bg-[rgba(255,255,255,0.65)] p-4 text-sm leading-7 text-slate-600"
+              >
                 {overview && session ? (
                   <>
                     <div className="font-semibold text-slate-900">
@@ -303,7 +306,7 @@ export default function WorkspaceBoard() {
           </div>
         </header>
 
-        {error ? <div className="notice-card notice-error">{error}</div> : null}
+        {error ? <div data-testid="board-error" className="notice-card notice-error">{error}</div> : null}
 
         <section className="grid gap-6 xl:grid-cols-[430px,minmax(0,1fr)]">
           <section className="glass-panel rounded-[2rem] p-6">
@@ -388,7 +391,12 @@ export default function WorkspaceBoard() {
                 </div>
               </div>
 
-              <button type="submit" disabled={submitting} className="button-ink h-12 w-full rounded-full">
+              <button
+                data-testid="create-draft-button"
+                type="submit"
+                disabled={submitting}
+                className="button-ink h-12 w-full rounded-full"
+              >
                 {submitting ? "Opening cockpit..." : "Create draft"}
               </button>
             </form>
