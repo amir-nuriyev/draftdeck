@@ -1074,6 +1074,7 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
                           />
                         </div>
                         <select
+                          data-testid={`share-role-${member.id}`}
                           value={shareDrafts[member.id] ?? "none"}
                           onChange={(event) =>
                             void handleCollaboratorChange(member.id, event.target.value as ShareDraft)

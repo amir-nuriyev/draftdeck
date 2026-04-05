@@ -32,6 +32,14 @@ cp .env.example .env.local
 npm run dev
 ```
 
+For browser smoke tests:
+
+```bash
+cd frontend
+npm run test:e2e:install
+npm run test:e2e
+```
+
 Backend: `http://127.0.0.1:8000`
 Frontend: `http://localhost:3000`
 
@@ -51,6 +59,7 @@ The frontend stores the selected persona in local storage and sends the matching
 - Backend: `. .venv/bin/activate && pytest -q`
 - Frontend: `npm run lint`
 - Frontend: `npm run build`
+- Frontend: `npm run test:e2e`
 
 ## Assignment-aligned scope
 
