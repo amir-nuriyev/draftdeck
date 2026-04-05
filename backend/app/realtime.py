@@ -55,6 +55,18 @@ class ConnectionManager:
     async def send_to_client(self, websocket: WebSocket, payload: dict[str, Any]) -> None:
         await websocket.send_json(payload)
 
+    async def send_to_clients(
+        self,
+        room_id: str,
+        payload: dict[str, Any],
+        *,
+        client_ids: set[str],
+    ) -> None:
+        for client_id, connection in list(self._rooms.get(room_id, {}).items()):
+            if client_id not in client_ids:
+                continue
+            await connection.websocket.send_json(payload)
+
     async def broadcast(
         self,
         room_id: str,
@@ -82,6 +94,87 @@ class ConnectionManager:
         connection.presence.cursor = cursor
         connection.presence.selection = selection
         return connection.presence
+
+    @staticmethod
+    def _normalize_range(
+        range_data: dict[str, Any] | None,
+        *,
+        expand_cursor: bool = False,
+    ) -> tuple[int, int] | None:
+        if not isinstance(range_data, dict):
+            return None
+
+        start = range_data.get("from")
+        end = range_data.get("to")
+        if not isinstance(start, int) or not isinstance(end, int):
+            return None
+
+        lower = min(start, end)
+        upper = max(start, end)
+        if lower == upper and expand_cursor:
+            upper = lower + 1
+        if lower == upper:
+            return None
+        return (lower, upper)
+
+    def find_conflicts(
+        self,
+        room_id: str,
+        client_id: str,
+        *,
+        patch_range: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        connection = self._rooms.get(room_id, {}).get(client_id)
+        if connection is None:
+            return None
+
+        source_range = self._normalize_range(
+            patch_range,
+            expand_cursor=True,
+        ) or self._normalize_range(connection.presence.selection, expand_cursor=True) or self._normalize_range(
+            connection.presence.cursor,
+            expand_cursor=True,
+        )
+        if source_range is None:
+            return None
+
+        conflicting_participants: list[dict[str, Any]] = []
+        conflicting_client_ids: set[str] = set()
+        for other_client_id, other_connection in self._rooms.get(room_id, {}).items():
+            if other_client_id == client_id:
+                continue
+
+            other_range = self._normalize_range(
+                other_connection.presence.selection,
+                expand_cursor=True,
+            ) or self._normalize_range(
+                other_connection.presence.cursor,
+                expand_cursor=True,
+            )
+            if other_range is None:
+                continue
+
+            overlaps = max(source_range[0], other_range[0]) < min(source_range[1], other_range[1])
+            if not overlaps:
+                continue
+
+            conflicting_client_ids.add(other_client_id)
+            conflicting_participants.append(
+                {
+                    "memberId": other_connection.presence.member_id,
+                    "memberName": other_connection.presence.member_name,
+                    "clientId": other_connection.presence.client_id,
+                }
+            )
+
+        if not conflicting_participants:
+            return None
+
+        return {
+            "range": {"from": source_range[0], "to": source_range[1]},
+            "participants": conflicting_participants,
+            "client_ids": conflicting_client_ids,
+        }
 
     def get_room_presence(self, room_id: str) -> list[dict[str, Any]]:
         return [

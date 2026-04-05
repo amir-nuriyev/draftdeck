@@ -6,6 +6,18 @@ from app.database import get_db
 from app.models import Draft, DraftCollaborator, Member
 
 
+def capability_flags(role: str | None) -> dict[str, bool]:
+    return {
+        "can_create_draft": True,
+        "can_view_draft": role in {"owner", "editor", "commenter", "viewer"},
+        "can_edit_draft": role in {"owner", "editor"},
+        "can_use_assistant": role in {"owner", "editor"},
+        "can_create_snapshot": role in {"owner", "editor"},
+        "can_restore_snapshot": role == "owner",
+        "can_manage_collaborators": role == "owner",
+    }
+
+
 def get_current_member(
     x_user_id: int | None = Header(default=1, alias="X-User-Id"),
     db: Session = Depends(get_db),

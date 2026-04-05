@@ -24,6 +24,7 @@ Swagger UI: `http://127.0.0.1:8000/docs`
 
 - `GET /api/health`
 - `GET /api/studio/overview`
+- `GET /api/session`
 - `GET|POST /api/drafts`
 - `GET|PATCH|DELETE /api/drafts/{id}`
 - `GET|POST /api/drafts/{id}/snapshots`
@@ -54,6 +55,7 @@ Server events:
 
 - `session:ack`
 - `presence:sync`
+- `conflict:warning`
 - `draft:patch`
 - `assistant:status`
 - `snapshot:restored`

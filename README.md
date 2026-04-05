@@ -71,4 +71,5 @@ The frontend stores the selected persona in local storage and sends the matching
 ## Additional notes
 
 - Architecture notes: [docs/architecture-outline.md](/Users/amir.nuriyev/Downloads/lab/lab9/draftdeck/docs/architecture-outline.md)
+- Assignment audit: [docs/task-audit.md](/Users/amir.nuriyev/Downloads/lab/lab9/draftdeck/docs/task-audit.md)
 - Mermaid sources: [diagrams/c4-level-1-system-context.mermaid](/Users/amir.nuriyev/Downloads/lab/lab9/draftdeck/diagrams/c4-level-1-system-context.mermaid), [diagrams/c4-level-2-container.mermaid](/Users/amir.nuriyev/Downloads/lab/lab9/draftdeck/diagrams/c4-level-2-container.mermaid), [diagrams/c4-level-3-backend-components.mermaid](/Users/amir.nuriyev/Downloads/lab/lab9/draftdeck/diagrams/c4-level-3-backend-components.mermaid), [diagrams/data-model-er.mermaid](/Users/amir.nuriyev/Downloads/lab/lab9/draftdeck/diagrams/data-model-er.mermaid)

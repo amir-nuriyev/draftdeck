@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import ensure_local_schema, seed_demo_users
 from app.realtime import manager
-from app.routers import assistant, drafts, members, studio
+from app.routers import assistant, drafts, members, session, studio
 from app.schemas import HealthResponse
 
 ensure_local_schema()
@@ -37,6 +37,7 @@ app.add_middleware(
 )
 
 app.include_router(studio.router, prefix=settings.api_prefix)
+app.include_router(session.router, prefix=settings.api_prefix)
 app.include_router(drafts.router, prefix=settings.api_prefix)
 app.include_router(assistant.router, prefix=settings.api_prefix)
 app.include_router(members.router, prefix=settings.api_prefix)
@@ -119,6 +120,36 @@ async def draft_socket(websocket: WebSocket, draft_id: str):
                 continue
 
             if message_type in {"draft:patch", "assistant:status", "snapshot:restored"}:
+                payload_data = payload.get("payload", {})
+                if not isinstance(payload_data, dict):
+                    payload_data = {}
+
+                if message_type == "draft:patch":
+                    conflict = manager.find_conflicts(
+                        draft_id,
+                        client_id,
+                        patch_range=payload_data.get("range"),
+                    )
+                    if conflict is not None:
+                        await manager.send_to_clients(
+                            draft_id,
+                            {
+                                "type": "conflict:warning",
+                                "roomId": draft_id,
+                                "message": "Potential edit conflict detected in the same region.",
+                                "range": conflict["range"],
+                                "participants": [
+                                    {
+                                        "memberId": user_id,
+                                        "memberName": user_name,
+                                        "clientId": client_id,
+                                    },
+                                    *conflict["participants"],
+                                ],
+                            },
+                            client_ids={client_id, *conflict["client_ids"]},
+                        )
+
                 await manager.broadcast(
                     draft_id,
                     {
@@ -129,7 +160,7 @@ async def draft_socket(websocket: WebSocket, draft_id: str):
                             "memberName": user_name,
                             "clientId": client_id,
                         },
-                        "payload": payload.get("payload", {}),
+                        "payload": payload_data,
                     },
                     exclude_client_id=None if message_type == "snapshot:restored" else client_id,
                 )

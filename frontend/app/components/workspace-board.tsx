@@ -14,6 +14,7 @@ import {
   ApiError,
   createDraft,
   getHealth,
+  getSession,
   getStudioOverview,
   listDrafts,
 } from "@/app/lib/api";
@@ -31,6 +32,7 @@ import {
   type DraftStage,
   type DraftSummary,
   type HealthResponse,
+  type SessionRecord,
   type StudioOverview,
   type UserRole,
 } from "@/app/lib/types";
@@ -76,6 +78,7 @@ export default function WorkspaceBoard() {
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [overview, setOverview] = useState<StudioOverview | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [session, setSession] = useState<SessionRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -103,10 +106,11 @@ export default function WorkspaceBoard() {
     setLoading(true);
     setError(null);
 
-    const [draftsResult, overviewResult, healthResult] = await Promise.allSettled([
+    const [draftsResult, overviewResult, healthResult, sessionResult] = await Promise.allSettled([
       listDrafts(),
       getStudioOverview(),
       getHealth(),
+      getSession(),
     ]);
 
     if (draftsResult.status === "fulfilled") {
@@ -127,6 +131,10 @@ export default function WorkspaceBoard() {
       setHealth(healthResult.value);
     } else if (draftsResult.status === "fulfilled") {
       setError("Backend health check failed. Start the FastAPI service first.");
+    }
+
+    if (sessionResult.status === "fulfilled") {
+      setSession(sessionResult.value);
     }
 
     setLoading(false);
@@ -277,12 +285,14 @@ export default function WorkspaceBoard() {
               </div>
 
               <div className="mt-5 rounded-[1.3rem] border border-[rgba(34,39,46,0.08)] bg-[rgba(255,255,255,0.65)] p-4 text-sm leading-7 text-slate-600">
-                {overview ? (
+                {overview && session ? (
                   <>
-                    <div className="font-semibold text-slate-900">{overview.active_members} demo members</div>
+                    <div className="font-semibold text-slate-900">
+                      {session.member.display_name} · {overview.active_members} demo members
+                    </div>
                     <div className="mt-1">
-                      LM Studio mode: {overview.assistant_mode}. Search and stage filters affect the
-                      board below in real time.
+                      Session mode: {session.auth_mode}. LM Studio mode: {overview.assistant_mode}.
+                      Search and stage filters affect the board below in real time.
                     </div>
                   </>
                 ) : (

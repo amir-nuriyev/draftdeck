@@ -138,6 +138,17 @@ def test_editor_can_update_but_viewer_cannot(client: TestClient):
     assert viewer_update.status_code == 403
 
 
+def test_non_collaborator_cannot_read_unshared_draft(client: TestClient):
+    created = create_draft(client)
+    draft_id = created["id"]
+
+    response = client.get(
+        f"/api/drafts/{draft_id}",
+        headers=auth_headers(4),
+    )
+    assert response.status_code == 403
+
+
 def test_owner_can_manage_collaborators_and_export(client: TestClient):
     created = create_draft(client)
     draft_id = created["id"]
@@ -194,6 +205,32 @@ def test_overview_reports_accessible_stage_counts(client: TestClient):
     assert payload["concept_count"] == 1
     assert payload["review_count"] == 1
     assert payload["active_members"] == 4
+
+
+def test_session_endpoint_reports_capabilities_for_shared_editor(client: TestClient):
+    created = create_draft(client)
+    draft_id = created["id"]
+
+    with TestingSessionLocal() as db:
+        db.add(DraftCollaborator(draft_id=draft_id, member_id=2, role="editor"))
+        db.commit()
+
+    response = client.get(
+        f"/api/session?draft_id={draft_id}",
+        headers=auth_headers(2),
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["auth_mode"] == "demo-header"
+    assert payload["member"]["display_name"] == "Omar Vale"
+    assert payload["draft_role"] == "editor"
+    assert payload["capabilities"]["can_edit_draft"] is True
+    assert payload["capabilities"]["can_manage_collaborators"] is False
+
+
+def test_invalid_user_header_is_rejected(client: TestClient):
+    response = client.get("/api/session", headers=auth_headers(999))
+    assert response.status_code == 401
 
 
 def test_restore_snapshot_returns_old_content(client: TestClient):

@@ -84,6 +84,24 @@ export type HealthResponse = {
   assistant_mode: "mock" | "live";
 };
 
+export type SessionCapabilities = {
+  can_create_draft: boolean;
+  can_view_draft: boolean;
+  can_edit_draft: boolean;
+  can_use_assistant: boolean;
+  can_create_snapshot: boolean;
+  can_restore_snapshot: boolean;
+  can_manage_collaborators: boolean;
+};
+
+export type SessionRecord = {
+  auth_mode: "demo-header";
+  member: MemberRecord;
+  draft_id: number | null;
+  draft_role: UserRole | null;
+  capabilities: SessionCapabilities;
+};
+
 export type StudioOverview = {
   app_name: string;
   accessible_drafts: number;

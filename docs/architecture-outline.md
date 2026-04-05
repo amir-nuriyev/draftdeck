@@ -19,6 +19,7 @@
 
 - `app/routers/drafts.py`: draft CRUD, snapshots, collaborators, and export routes.
 - `app/routers/assistant.py`: AI suggestion request and assistant run history.
+- `app/routers/session.py`: current demo session identity and capability flags.
 - `app/routers/studio.py`: board summary metrics for the frontend header.
 - `app/routers/members.py`: demo member list and current member route.
 - `app/deps.py`: shared auth header parsing and role checks.
@@ -36,6 +37,7 @@
 
 - `GET /api/health`
 - `GET /api/studio/overview`
+- `GET /api/session`
 - `GET|POST /api/drafts`
 - `GET|PATCH|DELETE /api/drafts/{id}`
 - `GET|POST /api/drafts/{id}/snapshots`
@@ -53,6 +55,6 @@
 ## Distinct design choices
 
 - The UI is lane-based rather than a file list plus editor.
-- Realtime messages use `draft:patch`, `assistant:status`, and `snapshot:restored` events instead of a generic document update event.
+- Realtime messages use `draft:patch`, `assistant:status`, `snapshot:restored`, and `conflict:warning` events instead of a generic document update event.
 - AI requests route to a fast or deep local model based on feature type, rather than a single model setting.
 - AI history stores the selection, context excerpt, and user decision, which supports later audit of accepted versus rejected suggestions.

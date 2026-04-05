@@ -239,6 +239,60 @@ def test_websocket_presence_and_draft_events(client: TestClient):
             assert assistant_event["payload"]["feature"] == "summarize"
 
 
+def test_websocket_warns_on_overlapping_edits(client: TestClient):
+    with client.websocket_connect("/ws/drafts/conflict-room?userId=1&userName=Maya&clientId=c1") as ws1:
+        ws1.receive_json()
+        ws1.receive_json()
+
+        with client.websocket_connect("/ws/drafts/conflict-room?userId=2&userName=Omar&clientId=c2") as ws2:
+            ws2.receive_json()
+            ws2.receive_json()
+            ws1.receive_json()
+
+            ws1.send_json(
+                {
+                    "type": "presence:update",
+                    "cursor": {"from": 6, "to": 6},
+                    "selection": {"from": 6, "to": 12},
+                }
+            )
+            ws1.receive_json()
+            ws2.receive_json()
+
+            ws2.send_json(
+                {
+                    "type": "presence:update",
+                    "cursor": {"from": 8, "to": 8},
+                    "selection": {"from": 8, "to": 14},
+                }
+            )
+            ws2.receive_json()
+            ws1.receive_json()
+
+            ws2.send_json(
+                {
+                    "type": "draft:patch",
+                    "payload": {
+                        "content": "overlapping change",
+                        "range": {"from": 8, "to": 10},
+                    },
+                }
+            )
+
+            warning_for_sender = ws2.receive_json()
+            warning_for_other = ws1.receive_json()
+            patch_for_other = ws1.receive_json()
+
+            assert warning_for_sender["type"] == "conflict:warning"
+            assert warning_for_other["type"] == "conflict:warning"
+            assert {participant["memberName"] for participant in warning_for_sender["participants"]} == {
+                "Maya",
+                "Omar",
+            }
+            assert patch_for_other["type"] == "draft:patch"
+            assert patch_for_other["payload"]["content"] == "overlapping change"
+
+
 def test_lm_studio_helpers_normalize_urls_and_strip_wrappers():
     with patch("app.services.settings.lm_studio_base_url", "http://127.0.0.1:1234"):
         assert build_lm_studio_chat_url() == "http://127.0.0.1:1234/v1/chat/completions"

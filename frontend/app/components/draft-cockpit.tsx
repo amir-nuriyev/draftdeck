@@ -99,6 +99,20 @@ type SocketMessage =
       payload: Record<string, unknown>;
     }
   | {
+      type: "conflict:warning";
+      roomId: string;
+      message: string;
+      range: {
+        from: number;
+        to: number;
+      };
+      participants: Array<{
+        memberId: string | number;
+        memberName: string;
+        clientId: string;
+      }>;
+    }
+  | {
       type: "error";
       roomId: string;
       message: string;
@@ -350,6 +364,14 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
       return;
     }
 
+    if (message.type === "conflict:warning") {
+      const names = message.participants.map((participant) => participant.memberName).join(" and ");
+      setRemoteNotice(
+        `${message.message} ${names} overlap around ${message.range.from}-${message.range.to}.`,
+      );
+      return;
+    }
+
     if (message.type === "snapshot:restored") {
       setRemoteNotice(`${message.sender.memberName} restored a snapshot.`);
       return;
@@ -432,10 +454,25 @@ export default function DraftCockpit({ draftId }: { draftId: number }) {
 
   function handleContentChange(event: ChangeEvent<HTMLTextAreaElement>) {
     const nextValue = event.target.value;
+    const start = event.target.selectionStart ?? 0;
+    const end = event.target.selectionEnd ?? start;
     setContent(nextValue);
+    setSelectionStart(start);
+    setSelectionEnd(end);
+    setSelectedText(nextValue.slice(start, end));
     setDirty(true);
-    pushLivePatch({ content: nextValue });
-    syncSelection();
+    pushLivePatch({
+      content: nextValue,
+      range: {
+        from: start,
+        to: Math.max(end, start + 1),
+      },
+    });
+    sendSocketMessage({
+      type: "presence:update",
+      cursor: { from: end, to: end },
+      selection: start === end ? null : { from: start, to: end },
+    });
   }
 
   function handleTitleChange(event: ChangeEvent<HTMLInputElement>) {

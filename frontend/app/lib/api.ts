@@ -7,6 +7,7 @@ import type {
   DraftSummary,
   HealthResponse,
   MemberRecord,
+  SessionRecord,
   SnapshotRecord,
   StudioOverview,
 } from "./types";
@@ -93,6 +94,11 @@ async function downloadRequest(path: string): Promise<Blob> {
 
 export function getHealth() {
   return apiRequest<HealthResponse>("/health");
+}
+
+export function getSession(draftId?: number) {
+  const suffix = draftId === undefined ? "" : `?draft_id=${draftId}`;
+  return apiRequest<SessionRecord>(`/session${suffix}`);
 }
 
 export function getStudioOverview() {

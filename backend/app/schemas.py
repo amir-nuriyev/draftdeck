@@ -20,6 +20,24 @@ class MemberRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SessionCapabilitiesRead(BaseModel):
+    can_create_draft: bool
+    can_view_draft: bool
+    can_edit_draft: bool
+    can_use_assistant: bool
+    can_create_snapshot: bool
+    can_restore_snapshot: bool
+    can_manage_collaborators: bool
+
+
+class SessionRead(BaseModel):
+    auth_mode: Literal["demo-header"]
+    member: MemberRead
+    draft_id: int | None
+    draft_role: RoleValue | None
+    capabilities: SessionCapabilitiesRead
+
+
 class DraftBase(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     brief: str = Field(default="", max_length=500)
