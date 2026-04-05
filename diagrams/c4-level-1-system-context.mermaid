@@ -1,16 +1,3 @@
-%% C4 Level 1: System Context Diagram
-graph TB
-    User["User<br/>Owner / Editor / Commenter / Viewer"]
-    Instructor["Instructor / Evaluator"]
-    System["Collaborative Document Editor<br/>with AI Writing Assistant"]
-    LM["LM Studio Local API<br/>OpenAI-compatible base URL"]
-
-    User -->|"Uses editor, collaboration, AI"| System
-    Instructor -->|"Runs and evaluates locally"| System
-    System -->|"Sends selected text for generation"| LM
-
-    style System fill:#1168bd,stroke:#0b4884,color:#fff
-    style LM fill:#999,stroke:#666,color:#fff
 graph TD
     Writer["Writers and reviewers"]
     Instructor["Instructor or evaluator"]
