@@ -1,0 +1,37 @@
+%% C4 Level 2: Container Diagram
+graph TB
+    Browser["Browser<br/>Next.js frontend"]
+    LM["LM Studio Local API"]
+
+    subgraph system ["Collaborative Document Editor"]
+        Frontend["Frontend App<br/>Next.js / React / TypeScript"]
+        Backend["Backend App<br/>FastAPI / Python"]
+        DB[("SQLite<br/>Local file database")]
+    end
+
+    Browser -->|"HTTPS / fetch"| Frontend
+    Frontend -->|"REST/JSON"| Backend
+    Frontend -->|"WebSocket"| Backend
+    Backend -->|"SQLAlchemy"| DB
+    Backend -->|"HTTP (OpenAI-compatible)"| LM
+
+    style system fill:#eef6ff,stroke:#1168bd
+    style Frontend fill:#438dd5,stroke:#2e6295,color:#fff
+    style Backend fill:#438dd5,stroke:#2e6295,color:#fff
+    style DB fill:#f5a623,stroke:#c7841a,color:#fff
+graph LR
+    Browser["Browser"]
+    Frontend["Next.js frontend
+board + cockpit UI"]
+    Backend["FastAPI backend
+REST + WebSocket"]
+    DB[("SQLite
+draftdeck.db")]
+    LM["LM Studio
+local models"]
+
+    Browser --> Frontend
+    Frontend -->|"HTTP JSON"| Backend
+    Frontend -->|"WebSocket"| Backend
+    Backend --> DB
+    Backend --> LM

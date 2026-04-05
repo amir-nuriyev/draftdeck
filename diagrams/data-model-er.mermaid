@@ -1,0 +1,109 @@
+erDiagram
+    User {
+        int id PK
+        string email
+        string name
+    }
+
+    Document {
+        int id PK
+        string title
+        text content
+        int owner_id FK
+        datetime created_at
+        datetime updated_at
+    }
+
+    DocumentVersion {
+        int id PK
+        int document_id FK
+        string label
+        text content
+        datetime created_at
+    }
+
+    DocumentPermission {
+        int id PK
+        int document_id FK
+        int user_id FK
+        string role
+    }
+
+    AIInteraction {
+        int id PK
+        int document_id FK
+        int user_id FK
+        string feature
+        text prompt_excerpt
+        text response_text
+        string model_name
+        string status
+        datetime created_at
+    }
+
+    User ||--o{ Document : owns
+    User ||--o{ DocumentPermission : receives
+    User ||--o{ AIInteraction : creates
+    Document ||--o{ DocumentVersion : has
+    Document ||--o{ DocumentPermission : has
+    Document ||--o{ AIInteraction : has
+erDiagram
+    MEMBER ||--o{ DRAFT : owns
+    MEMBER ||--o{ DRAFT_COLLABORATOR : receives
+    DRAFT ||--o{ DRAFT_COLLABORATOR : shares_with
+    DRAFT ||--o{ DRAFT_SNAPSHOT : stores
+    MEMBER ||--o{ ASSISTANT_RUN : triggers
+    DRAFT ||--o{ ASSISTANT_RUN : references
+
+    MEMBER {
+        int id
+        string email
+        string display_name
+        string focus_area
+        string color_hex
+    }
+
+    DRAFT {
+        int id
+        string title
+        string brief
+        text content
+        string stage
+        string accent
+        int owner_id
+        datetime created_at
+        datetime updated_at
+    }
+
+    DRAFT_COLLABORATOR {
+        int id
+        int draft_id
+        int member_id
+        string role
+    }
+
+    DRAFT_SNAPSHOT {
+        int id
+        int draft_id
+        string label
+        text content
+        datetime created_at
+    }
+
+    ASSISTANT_RUN {
+        int id
+        int draft_id
+        int member_id
+        string feature
+        text selection_text
+        text context_excerpt
+        text result_text
+        string model_route
+        string status
+        string decision
+        string target_language
+        int selection_start
+        int selection_end
+        text applied_excerpt
+        datetime created_at
+    }
