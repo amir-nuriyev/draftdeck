@@ -1,20 +1,16 @@
 # DraftDeck (AI1220 Assignment 2)
 
-DraftDeck is a collaborative document editor with JWT auth, realtime collaboration, and a streaming AI writing assistant.
+`DraftDeck` is a collaborative writing cockpit with JWT auth, realtime editing, and a streaming AI assistant.
 
-## Included A2 scope
+## What changed from the base repo
 
-- JWT register/login/refresh/logout/me with hashed passwords
-- Draft CRUD, autosave, snapshots, restore, collaborators, exports
-- Rich-text editor (Tiptap): headings, bold, italic, lists, code blocks
-- Authenticated realtime websocket collaboration + presence
-- Yjs character-level collaborative updates
-- AI features: rewrite, summarize, translate, restructure, expand, grammar, custom
-- SSE streaming suggestions + cancel + compare/apply/reject/edit + partial acceptance + undo
-- AI interaction history logging
-- Share-by-link with role/mode and revocation + `/share/[token]` resolve page
+- Product framing shifted to a staged drafting cockpit.
+- API now uses `drafts`, `assistant`, `members`, `studio`, `auth`, and `share` routes.
+- Data model expanded for `RefreshSession`, `DraftVersion`, `ShareLink`, and richer `AssistantRun` history.
+- Realtime collaboration now uses authenticated WebSocket sessions with role-based write enforcement.
+- AI flow now supports both synchronous and SSE streaming suggestions with cancellation.
 
-## Quick Start
+## Run locally
 
 ### One command
 
@@ -22,7 +18,7 @@ DraftDeck is a collaborative document editor with JWT auth, realtime collaborati
 ./run.sh
 ```
 
-or
+or:
 
 ```bash
 make run
@@ -54,41 +50,67 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 - Backend: `http://127.0.0.1:8000`
 - API docs: `http://127.0.0.1:8000/docs`
 
-## Demo Accounts (seeded)
+## LM Studio live mode
 
-- `maya / owner123`
-- `omar / editor123`
-- `irene / comment123`
-- `nika / viewer123`
-
-## Environment
-
-- Backend keys: see `backend/.env.example`
-- Frontend keys: see `frontend/.env.example`
-
-## Verification
-
-Backend tests:
+1. Start LM Studio and load a chat model.
+2. Enable local server at `http://127.0.0.1:1234`.
+3. Check available model IDs:
 
 ```bash
-cd backend
-source .venv/bin/activate
-pytest -q
+curl http://127.0.0.1:1234/v1/models
 ```
 
-Frontend checks:
+4. Set in `backend/.env`:
+
+```env
+LLM_MOCK=false
+LLM_FAST_MODEL=<model-id-from-lm-studio>
+LLM_DEEP_MODEL=<model-id-from-lm-studio>
+```
+
+5. Restart backend and verify:
 
 ```bash
-cd frontend
-npm run lint
-npm run build
-npm run test:unit
-npm run test:e2e
+curl http://127.0.0.1:8000/api/health
 ```
 
-## Required A2 docs in repo
+Expected: `"assistant_mode":"live"`.
 
-- `DEVIATIONS.md`
-- `docs/a2-compliance-checklist.md`
-- `backend/.env.example`
-- `frontend/.env.example`
+### Mock fallback
+
+Set `LLM_MOCK=true` in `backend/.env` to run assistant flows without LM Studio.
+
+## Demo accounts (seeded)
+
+- `maya / owner123` (Owner)
+- `omar / editor123` (Editor)
+- `irene / comment123` (Commenter)
+- `nika / viewer123` (Viewer)
+
+## Verified checks
+
+- Backend: `. .venv/bin/activate && pytest -q`
+- Frontend: `npm run lint`
+- Frontend: `npm run build`
+- Frontend: `npm run test:unit`
+- Frontend: `npm run test:e2e`
+
+## Assignment-aligned scope
+
+- JWT auth lifecycle with refresh rotation and revocation
+- Draft CRUD with autosave, versions/snapshots, collaborators, and exports
+- Rich-text editing (Tiptap) with authenticated realtime collaboration
+- Presence and Yjs update sync over WebSocket
+- AI streaming + cancel + accept/reject/partial apply + undo
+- Share-by-link with revocation and access-mode enforcement
+
+## Docs and diagram links
+
+- Architecture outline: [docs/architecture-outline.md](docs/architecture-outline.md)
+- Task audit: [docs/task-audit.md](docs/task-audit.md)
+- A2 compliance checklist: [docs/a2-compliance-checklist.md](docs/a2-compliance-checklist.md)
+- Deviation note: [DEVIATIONS.md](DEVIATIONS.md)
+- System context (C4 L1): [diagrams/c4-level-1-system-context.mermaid](diagrams/c4-level-1-system-context.mermaid)
+- Container diagram (C4 L2): [diagrams/c4-level-2-container.mermaid](diagrams/c4-level-2-container.mermaid)
+- Backend components (C4 L3): [diagrams/c4-level-3-backend-components.mermaid](diagrams/c4-level-3-backend-components.mermaid)
+- Data model ER: [diagrams/data-model-er.mermaid](diagrams/data-model-er.mermaid)
