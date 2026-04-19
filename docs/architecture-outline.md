@@ -1,60 +1,51 @@
-# DraftDeck Architecture Outline
+# DraftDeck A2 Architecture Outline
 
-`DraftDeck` is a local-first collaborative writing cockpit for the February 2026 assignment brief. It stays in the same problem domain as the reference repo, but the product framing, API contracts, data model, and frontend workflow have been redesigned around staged drafts rather than a generic document dashboard.
+## Runtime Shape
 
-## Product shape
+- `frontend/` (Next.js + React): auth shell, board, cockpit, share resolve view.
+- `backend/` (FastAPI): REST API + websocket collaboration endpoint.
+- `SQLite` (`backend/data/*.db`): local persistence.
+- `LM Studio` (or `LLM_MOCK=true`): AI provider.
 
-- `board`: a stage-based board for concept, drafting, and review work.
-- `cockpit`: a split layout for editing, realtime room awareness, AI suggestions, snapshots, and sharing.
-- `assistant`: suggestion requests are recorded as explicit runs with `pending`, `accepted`, `rejected`, or `partial` outcomes.
+## Backend Modules
 
-## Containers
+- `app/routers/auth.py`: register/login/refresh/logout/me.
+- `app/routers/drafts.py`: draft CRUD, versions, snapshots, collaborators, exports, share-link CRUD.
+- `app/routers/share.py`: `/share/{token}/resolve` flow.
+- `app/routers/assistant.py`: sync + streaming suggestions, cancel, run history/decision updates.
+- `app/main.py`: route registration, CORS, websocket token auth, realtime message policy.
+- `app/realtime.py`: room connection manager, presence, conflict warnings, Yjs update replay buffer.
+- `app/prompts.py` + `app/llm_provider.py`: prompt templates and provider abstraction.
 
-- `frontend/`: Next.js 16 app router UI.
-- `backend/`: FastAPI API plus realtime WebSocket hub.
-- `backend/data/draftdeck.db`: local SQLite persistence.
-- `LM Studio`: local LLM endpoint, with `LLM_MOCK=true` fallback for demos and tests.
+## Frontend Modules
 
-## Backend modules
+- `app/components/auth-shell.tsx`: login/register shell + session bootstrap.
+- `app/components/workspace-board.tsx`: draft listing + creation.
+- `app/components/draft-cockpit.tsx`: rich editing, realtime, assistant UX, sharing, snapshots.
+- `app/components/share-resolve-view.tsx`: share-token resolve and read/open flow.
+- `app/lib/api.ts`: typed API client, bearer auth, refresh retry, SSE parser.
+- `app/lib/auth.ts`: token storage + refresh helper.
 
-- `app/routers/drafts.py`: draft CRUD, snapshots, collaborators, and export routes.
-- `app/routers/assistant.py`: AI suggestion request and assistant run history.
-- `app/routers/session.py`: current demo session identity and capability flags.
-- `app/routers/studio.py`: board summary metrics for the frontend header.
-- `app/routers/members.py`: demo member list and current member route.
-- `app/deps.py`: shared auth header parsing and role checks.
-- `app/realtime.py`: in-memory room presence and live patch fan-out.
+## Data Model Highlights
 
-## Data model
+- `Member`, `RefreshSession`
+- `Draft`, `DraftVersion`, `DraftSnapshot`
+- `DraftCollaborator`
+- `ShareLink`
+- `AssistantRun`
 
-- `Member`: seeded local users for owner, editor, commenter, and viewer perspectives.
-- `Draft`: staged writing artifact with `title`, `brief`, `content`, `stage`, and `accent`.
-- `DraftCollaborator`: per-draft access role for non-owner members.
-- `DraftSnapshot`: named content checkpoints that can be restored.
-- `AssistantRun`: selection-aware AI history with decision tracking.
+## Collaboration/Data Flow
 
-## API surface
+- Document load: `GET /api/drafts/{id}`.
+- Realtime: websocket join with JWT query token.
+- Local rich-text edits: Yjs updates sent as websocket `yjs:update` messages.
+- Presence: websocket `presence:update` and server `presence:sync`.
+- Persistence: autosave `PATCH /api/drafts/{id}` (debounced), snapshots/versions recorded server-side.
 
-- `GET /api/health`
-- `GET /api/studio/overview`
-- `GET /api/session`
-- `GET|POST /api/drafts`
-- `GET|PATCH|DELETE /api/drafts/{id}`
-- `GET|POST /api/drafts/{id}/snapshots`
-- `POST /api/drafts/{id}/snapshots/{snapshot_id}/restore`
-- `GET|POST /api/drafts/{id}/collaborators`
-- `DELETE /api/drafts/{id}/collaborators/{member_id}`
-- `GET /api/drafts/{id}/export?format=md|txt|json`
-- `POST /api/assistant/suggest`
-- `GET /api/assistant/runs`
-- `PATCH /api/assistant/runs/{run_id}`
-- `GET /api/members`
-- `GET /api/members/me`
-- `WS /ws/drafts/{draft_id}`
+## AI Flow
 
-## Distinct design choices
-
-- The UI is lane-based rather than a file list plus editor.
-- Realtime messages use `draft:patch`, `assistant:status`, `snapshot:restored`, and `conflict:warning` events instead of a generic document update event.
-- AI requests route to a fast or deep local model based on feature type, rather than a single model setting.
-- AI history stores the selection, context excerpt, and user decision, which supports later audit of accepted versus rejected suggestions.
+- Client sends `POST /api/assistant/suggest/stream`.
+- Backend streams token chunks (`text/event-stream`).
+- Client renders progressive output, supports cancel via `POST /api/assistant/runs/{id}/cancel`.
+- User compares original vs suggestion, accepts/rejects/partially applies, can undo applied change.
+- All runs persisted in `AssistantRun` with prompt/model/provider/output/decision metadata.

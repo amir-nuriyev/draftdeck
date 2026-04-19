@@ -1,66 +1,64 @@
-# Assignment Audit
+# Assignment 2 Task Audit
 
-This file checks the current `DraftDeck` PoC against the assignment brief and distinguishes between:
+Date: 2026-04-19
 
-- `Implemented`: present in code and exercised by tests.
-- `Partial`: present in a limited PoC form.
-- `Document-only`: described in docs but not implemented as runtime behavior.
+This audit tracks implemented runtime scope against Assignment 2 requirements (including bonus items requested).
 
-## Part 4 PoC Minimum
+## Core App (Part 1)
 
-| Requirement | Status | Evidence |
-|---|---|---|
-| Working frontend | Implemented | `frontend/app/page.tsx`, `frontend/app/drafts/[id]/page.tsx` |
-| Frontend to backend communication | Implemented | `frontend/app/lib/api.ts`, FastAPI routes under `backend/app/routers/` |
-| Data contract validation | Implemented | backend pytest suite in `backend/tests/` |
-| Clear README | Implemented | `README.md`, `backend/README.md`, `frontend/README.md` |
+- Authentication/session lifecycle: Implemented
+  - JWT access + refresh rotation, logout revocation, hashed passwords.
+- Protected API routes: Implemented
+  - Bearer auth enforced through dependency layer.
+- Document management: Implemented
+  - Draft CRUD, metadata, dashboard listing, autosave, snapshots, restore.
+- Rich-text editing baseline: Implemented
+  - Tiptap with headings/bold/italic/lists/code blocks.
+- Server-side role enforcement: Implemented
+  - Owner/editor/viewer/commenter checks on REST + websocket write messages.
 
-## Functional Scope
+## Real-Time Collaboration (Part 2)
 
-| Capability area from brief | Status | Notes |
-|---|---|---|
-| Real-time collaboration | Partial | Presence, live patch fan-out, reconnect behavior, and overlap conflict warnings are implemented. Full OT/CRDT conflict resolution is not. |
-| Presence awareness (who is online, where) | Implemented | WebSocket presence sync includes cursor/selection metadata. |
-| Conflict handling for same region edits | Partial | Overlapping edit warnings are implemented via `conflict:warning`. Automatic merge/reconciliation is not. |
-| AI writing assistant | Implemented | Rewrite, summarize, translate, restructure, suggestion review, accept/reject/partial apply, and history tracking. |
-| Document management | Implemented | Draft CRUD, sharing, snapshots, restore, export. |
-| User management | Partial | Demo-header auth, role enforcement, and session introspection endpoint exist. Production authentication is not implemented. |
-| Session handling | Partial | `GET /api/session` returns current member, draft role, and capability flags. There is no persistent login flow. |
+- Authenticated websocket transport: Implemented
+- Concurrent editing baseline: Implemented
+- Character-level conflict resolution (bonus): Implemented
+  - Yjs update synchronization across clients.
+- Presence/awareness baseline: Implemented
+  - Online participants + live selection range display.
+- Reconnect lifecycle: Implemented
+  - Automatic websocket reconnect + pending local update flush.
+- Offline editing graceful behavior: Implemented
+  - Local draft cache + autosave resumes on reconnect.
 
-## Assignment-specific Quality Points
+## AI Assistant (Part 3)
 
-| Brief expectation | Status | Notes |
-|---|---|---|
-| Authorization for owner/editor/commenter/viewer | Implemented | Backend role checks cover edit, assistant use, snapshot restore, and collaborator management. |
-| Suggestion accept/reject flow | Implemented | Assistant runs track `pending`, `accepted`, `rejected`, and `partial`. |
-| Export to common formats | Implemented | Markdown, text, and JSON exports. |
-| AI unavailable fallback | Implemented | Mock mode plus 502-style error handling for LM Studio failures. |
-| Reconnect communication model | Partial | Frontend reconnects the WebSocket and restores room presence; offline persistence is not implemented. |
+- AI feature set (>=2): Implemented
+  - rewrite, summarize, translate, restructure, expand, grammar, custom.
+- Streaming (hard requirement): Implemented
+  - SSE token streaming with progressive UI rendering.
+- Cancel in-progress generation: Implemented
+- Compare/accept/reject/edit UX: Implemented
+- Undo after acceptance: Implemented
+- Partial acceptance bonus: Implemented
+  - diff-segment selection and partial apply path.
+- Prompt configurability + provider abstraction: Implemented
+- AI interaction history: Implemented
 
-## Automated Coverage
+## Testing & Quality (Part 4)
 
-The backend test suite currently covers:
+- Backend unit/integration/websocket tests: Implemented (`pytest`)
+- Frontend component tests: Implemented (`vitest` + RTL)
+- End-to-end bonus tests: Implemented (`playwright`)
+- Single-command local startup: Implemented (`run.sh`, `Makefile`)
+- `.env.example` coverage: Implemented (backend + frontend)
+- FastAPI API docs with operation metadata: Implemented
+- Deviation report: Implemented (`DEVIATIONS.md`)
 
-- draft create/read/update/share/export/restore flows
-- unauthorized access rejection
-- session capability reporting
-- assistant mock responses and decision updates
-- realtime presence, patch events, and overlap conflict warnings
+## Bonus Coverage (Part 3 + rubric bonus section)
 
-Run with:
+- CRDT character-level collaboration: Implemented (Yjs updates)
+- Cursor/selection awareness bonus: Implemented (selection visualization in live presence cards)
+- Share-by-link with revocation: Implemented
+- Partial acceptance of AI suggestions: Implemented
+- End-to-end tests for login→AI acceptance: Implemented
 
-```bash
-cd backend
-. .venv/bin/activate
-pytest -q
-```
-
-## Remaining non-PoC items
-
-These are still intentionally outside the current implementation:
-
-- production auth, passwords, OAuth, or JWT login
-- persistent server-side session store
-- CRDT or operational transform merge logic
-- organization-wide quotas and billing
-- full report sections for requirements engineering, project management, ADRs, and timeline
