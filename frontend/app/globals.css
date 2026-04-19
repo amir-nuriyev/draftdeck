@@ -262,3 +262,91 @@ a:focus-visible {
   border-radius: 0.95rem;
   cursor: pointer;
 }
+
+.tiptap-editor .ProseMirror {
+  min-height: 30rem;
+  line-height: 1.75;
+  color: var(--foreground);
+}
+
+.tiptap-editor .ProseMirror > * + * {
+  margin-top: 0.75rem;
+}
+
+.tiptap-editor .ProseMirror h1,
+.tiptap-editor .ProseMirror h2,
+.tiptap-editor .ProseMirror h3 {
+  font-family: var(--font-display), sans-serif;
+  letter-spacing: -0.02em;
+  margin-top: 1.2rem;
+}
+
+.tiptap-editor .ProseMirror h1 {
+  font-size: 2rem;
+}
+
+.tiptap-editor .ProseMirror h2 {
+  font-size: 1.6rem;
+}
+
+.tiptap-editor .ProseMirror h3 {
+  font-size: 1.3rem;
+}
+
+.tiptap-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #8a94a5;
+  float: left;
+  pointer-events: none;
+  height: 0;
+}
+
+.tiptap-editor .ProseMirror ul,
+.tiptap-editor .ProseMirror ol {
+  padding-left: 1.2rem;
+}
+
+.tiptap-editor .ProseMirror code {
+  font-family: var(--font-mono), monospace;
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.tiptap-editor .ProseMirror pre {
+  background: rgba(15, 23, 42, 0.88);
+  color: #f8fafc;
+  border-radius: 0.85rem;
+  padding: 0.8rem 0.95rem;
+  overflow-x: auto;
+}
+
+.tiptap-editor .ProseMirror pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.tiptap-editor .collaboration-cursor__caret {
+  border-left: 2px solid var(--color);
+  margin-left: -1px;
+  margin-right: -1px;
+  pointer-events: none;
+  position: relative;
+  word-break: normal;
+}
+
+.tiptap-editor .collaboration-cursor__label {
+  background: var(--color);
+  border-radius: 0.3rem 0.3rem 0.3rem 0;
+  color: white;
+  font-size: 0.72rem;
+  font-weight: 600;
+  left: -1px;
+  line-height: 1;
+  padding: 0.22rem 0.35rem;
+  position: absolute;
+  top: -1.35em;
+  user-select: none;
+  white-space: nowrap;
+}
