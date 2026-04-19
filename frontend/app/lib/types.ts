@@ -1,8 +1,16 @@
 export type UserRole = "owner" | "editor" | "commenter" | "viewer";
+export type AccessMode = "authenticated" | "public";
 
 export type DraftStage = "concept" | "drafting" | "review";
-export type AssistantFeature = "rewrite" | "summarize" | "translate" | "restructure";
-export type AssistantDecision = "pending" | "accepted" | "rejected" | "partial";
+export type AssistantFeature =
+  | "rewrite"
+  | "summarize"
+  | "translate"
+  | "restructure"
+  | "expand"
+  | "grammar"
+  | "custom";
+export type AssistantDecision = "pending" | "accepted" | "rejected" | "partial" | "canceled";
 
 export type DraftSummary = {
   id: number;
@@ -19,6 +27,7 @@ export type DraftSummary = {
 
 export type DraftRecord = DraftSummary & {
   content: string;
+  plain_content: string;
 };
 
 export type SnapshotRecord = {
@@ -36,13 +45,32 @@ export type CollaboratorRecord = {
   role: UserRole;
   display_name: string;
   email: string;
+  username: string;
   focus_area: string;
   color_hex: string;
+};
+
+export type ShareLinkRecord = {
+  id: number;
+  draft_id: number;
+  role: UserRole;
+  access_mode: AccessMode;
+  token: string;
+  revoked_at: string | null;
+  expires_at: string | null;
+  created_at: string;
+};
+
+export type ShareResolveRecord = {
+  draft: DraftRecord;
+  granted_role: UserRole;
+  access_mode: AccessMode;
 };
 
 export type MemberRecord = {
   id: number;
   email: string;
+  username: string;
   display_name: string;
   focus_area: string;
   color_hex: string;
@@ -56,14 +84,17 @@ export type AssistantRun = {
   feature: AssistantFeature;
   selection_text: string;
   context_excerpt: string;
+  prompt_text: string;
   result_text: string;
   model_route: string;
+  provider: string;
   status: string;
   decision: AssistantDecision;
   target_language: string | null;
   selection_start: number | null;
   selection_end: number | null;
   applied_excerpt: string | null;
+  canceled_at: string | null;
   created_at: string;
 };
 
@@ -95,7 +126,7 @@ export type SessionCapabilities = {
 };
 
 export type SessionRecord = {
-  auth_mode: "demo-header";
+  auth_mode: "jwt";
   member: MemberRecord;
   draft_id: number | null;
   draft_role: UserRole | null;
@@ -110,6 +141,13 @@ export type StudioOverview = {
   review_count: number;
   active_members: number;
   assistant_mode: "mock" | "live";
+};
+
+export type AuthTokenRecord = {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  access_expires_in: number;
 };
 
 export const roleOptions: Array<{
@@ -157,6 +195,9 @@ export const assistantFeatureOptions: Array<{
   { value: "summarize", label: "Summarize" },
   { value: "translate", label: "Translate" },
   { value: "restructure", label: "Restructure" },
+  { value: "expand", label: "Expand" },
+  { value: "grammar", label: "Grammar & spelling" },
+  { value: "custom", label: "Custom prompt" },
 ];
 
 export function canEdit(role: UserRole) {

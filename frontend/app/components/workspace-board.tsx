@@ -23,9 +23,7 @@ import {
   accentPreview,
   formatTimestamp,
   getExcerpt,
-  readStoredRole,
   stageLabel,
-  writeStoredRole,
 } from "@/app/lib/ui";
 import {
   stageOptions,
@@ -34,9 +32,7 @@ import {
   type HealthResponse,
   type SessionRecord,
   type StudioOverview,
-  type UserRole,
 } from "@/app/lib/types";
-import PersonaSwitcher from "./persona-switcher";
 
 type StageFilter = "all" | DraftStage;
 
@@ -74,7 +70,6 @@ function StatCard({
 
 export default function WorkspaceBoard() {
   const router = useRouter();
-  const [role, setRole] = useState<UserRole>("owner");
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [overview, setOverview] = useState<StudioOverview | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -90,17 +85,6 @@ export default function WorkspaceBoard() {
   const [stage, setStage] = useState<DraftStage>("concept");
   const [accent, setAccent] = useState<string>(accentOptions[0].value);
   const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    const storedRole = readStoredRole();
-    if (storedRole) {
-      setRole(storedRole);
-    }
-  }, []);
-
-  useEffect(() => {
-    writeStoredRole(role);
-  }, [role]);
 
   async function loadBoard() {
     setLoading(true);
@@ -142,7 +126,7 @@ export default function WorkspaceBoard() {
 
   useEffect(() => {
     void loadBoard();
-  }, [role]);
+  }, []);
 
   const filteredDrafts = drafts.filter((draft) => {
     const query = deferredSearch.trim().toLowerCase();
@@ -202,7 +186,7 @@ export default function WorkspaceBoard() {
               <div className="flex items-start gap-4">
                 <BrandMark />
                 <div className="space-y-3">
-                  <div className="section-kicker">Assignment 1 PoC</div>
+                  <div className="section-kicker">Assignment 2 Runtime</div>
                   <div>
                     <h1 className="max-w-3xl text-4xl font-semibold tracking-[-0.04em] text-slate-950 sm:text-5xl">
                       DraftDeck keeps collaborative writing visible, staged, and AI-assisted.
@@ -245,16 +229,12 @@ export default function WorkspaceBoard() {
                 <div>
                   <div className="section-kicker">Session lens</div>
                   <div className="mt-2 text-lg font-semibold tracking-tight text-slate-900">
-                    Demo personas
+                    Authenticated session
                   </div>
                 </div>
                 <span className="signal-pill">
                   {health ? `Backend ${health.assistant_mode}` : "Connecting"}
                 </span>
-              </div>
-
-              <div className="mt-4">
-                <PersonaSwitcher value={role} onChange={setRole} compact />
               </div>
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -291,7 +271,7 @@ export default function WorkspaceBoard() {
                 {overview && session ? (
                   <>
                     <div className="font-semibold text-slate-900">
-                      {session.member.display_name} · {overview.active_members} demo members
+                      {session.member.display_name} · {overview.active_members} registered users
                     </div>
                     <div className="mt-1">
                       Session mode: {session.auth_mode}. LM Studio mode: {overview.assistant_mode}.

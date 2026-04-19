@@ -1,3 +1,4 @@
+import AuthShell from "@/app/components/auth-shell";
 import DraftCockpit from "@/app/components/draft-cockpit";
 
 type DraftPageProps = {
@@ -8,5 +9,9 @@ type DraftPageProps = {
 
 export default async function DraftPage({ params }: DraftPageProps) {
   const { id } = await params;
-  return <DraftCockpit draftId={Number(id)} />;
+  return (
+    <AuthShell>
+      <DraftCockpit draftId={Number(id)} />
+    </AuthShell>
+  );
 }

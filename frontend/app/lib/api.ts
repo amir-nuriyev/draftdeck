@@ -1,24 +1,39 @@
 import { API_BASE_URL } from "./config";
+import { clearAuthTokens, getAccessToken, getRefreshToken, refreshAccessToken, setAuthTokens } from "./auth";
 import type {
+  AssistantFeature,
   AssistantRun,
   AssistantSuggestResponse,
+  AuthTokenRecord,
   CollaboratorRecord,
   DraftRecord,
   DraftSummary,
   HealthResponse,
   MemberRecord,
   SessionRecord,
+  ShareLinkRecord,
+  ShareResolveRecord,
   SnapshotRecord,
   StudioOverview,
+  UserRole,
 } from "./types";
-import { getDemoIdentityFromStoredRole } from "./ui";
 
 type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
+  skipAuthRefresh?: boolean;
 };
 
 type ErrorShape = {
   detail?: string;
+};
+
+type StreamCallbacks = {
+  signal?: AbortSignal;
+  onStart?: (payload: { run_id: number; model_name: string; provider: string; mocked: boolean }) => void;
+  onChunk?: (text: string) => void;
+  onDone?: () => void;
+  onCanceled?: () => void;
+  onError?: (message: string) => void;
 };
 
 export class ApiError extends Error {
@@ -31,65 +46,158 @@ export class ApiError extends Error {
   }
 }
 
+function buildAuthHeaders(headers: HeadersInit | undefined): HeadersInit {
+  const token = getAccessToken();
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(headers ?? {}),
+  };
+}
+
+async function parseError(response: Response): Promise<ApiError> {
+  const rawBody = await response.text();
+  if (rawBody) {
+    try {
+      const parsed = JSON.parse(rawBody) as ErrorShape;
+      if (typeof parsed.detail === "string") {
+        return new ApiError(parsed.detail, response.status);
+      }
+    } catch {
+      return new ApiError(rawBody, response.status);
+    }
+  }
+  return new ApiError(`Request failed with status ${response.status}.`, response.status);
+}
+
 async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const identity = getDemoIdentityFromStoredRole();
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      "X-User-Id": String(identity.userId),
-      ...(options.headers ?? {}),
-    },
+    headers: buildAuthHeaders(options.headers),
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     cache: "no-store",
   });
+
+  if (response.status === 401 && !options.skipAuthRefresh) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return apiRequest<T>(path, { ...options, skipAuthRefresh: true });
+    }
+  }
 
   if (response.status === 204) {
     return undefined as T;
   }
 
-  const rawBody = await response.text();
-  const data = rawBody ? (JSON.parse(rawBody) as ErrorShape | T) : null;
-
   if (!response.ok) {
-    const detail =
-      typeof (data as ErrorShape | null)?.detail === "string"
-        ? (data as ErrorShape).detail!
-        : `Request failed with status ${response.status}.`;
-    throw new ApiError(detail, response.status);
+    throw await parseError(response);
   }
 
-  return data as T;
+  const rawBody = await response.text();
+  return (rawBody ? JSON.parse(rawBody) : null) as T;
 }
 
 async function downloadRequest(path: string): Promise<Blob> {
-  const identity = getDemoIdentityFromStoredRole();
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      "X-User-Id": String(identity.userId),
-    },
+    headers: buildAuthHeaders(undefined),
     cache: "no-store",
   });
 
-  if (!response.ok) {
-    const rawBody = await response.text();
-    let message = `Request failed with status ${response.status}.`;
-
-    if (rawBody) {
-      try {
-        const parsed = JSON.parse(rawBody) as ErrorShape;
-        if (typeof parsed.detail === "string") {
-          message = parsed.detail;
-        }
-      } catch {
-        message = rawBody;
-      }
+  if (response.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return downloadRequest(path);
     }
+  }
 
-    throw new ApiError(message, response.status);
+  if (!response.ok) {
+    throw await parseError(response);
   }
 
   return response.blob();
+}
+
+export async function streamSuggestion(
+  payload: {
+    feature: AssistantFeature;
+    selected_text: string;
+    surrounding_context: string;
+    target_language?: string;
+    draft_id?: number;
+    selection_start?: number;
+    selection_end?: number;
+    tone?: string;
+    output_length?: string;
+    custom_prompt?: string;
+  },
+  callbacks: StreamCallbacks = {},
+) {
+  const token = getAccessToken();
+  const response = await fetch(`${API_BASE_URL}/assistant/suggest/stream`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+    signal: callbacks.signal,
+  });
+
+  if (response.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      return streamSuggestion(payload, callbacks);
+    }
+  }
+  if (!response.ok) {
+    throw await parseError(response);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new ApiError("Streaming body is unavailable.", 500);
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const eventBlock of events) {
+      if (!eventBlock.trim()) {
+        continue;
+      }
+      const lines = eventBlock.split("\n");
+      const eventName = lines.find((line) => line.startsWith("event:"))?.replace("event:", "").trim();
+      const dataRaw = lines.find((line) => line.startsWith("data:"))?.replace("data:", "").trim() ?? "{}";
+      const data = JSON.parse(dataRaw) as Record<string, unknown>;
+      if (eventName === "start") {
+        callbacks.onStart?.({
+          run_id: Number(data.run_id),
+          model_name: String(data.model_name ?? ""),
+          provider: String(data.provider ?? ""),
+          mocked: Boolean(data.mocked),
+        });
+      }
+      if (eventName === "chunk") {
+        callbacks.onChunk?.(String(data.text ?? ""));
+      }
+      if (eventName === "done") {
+        callbacks.onDone?.();
+      }
+      if (eventName === "canceled") {
+        callbacks.onCanceled?.();
+      }
+      if (eventName === "error") {
+        callbacks.onError?.(String(data.message ?? "Streaming error"));
+      }
+    }
+  }
 }
 
 export function getHealth() {
@@ -168,7 +276,7 @@ export function listCollaborators(draftId: number) {
 
 export function upsertCollaborator(
   draftId: number,
-  payload: { member_id: number; role: "owner" | "editor" | "commenter" | "viewer" },
+  payload: { member_id: number; role: UserRole },
 ) {
   return apiRequest<CollaboratorRecord>(`/drafts/${draftId}/collaborators`, {
     method: "POST",
@@ -196,7 +304,7 @@ export function getCurrentMember() {
 
 export function listAssistantRuns(params?: {
   draft_id?: number;
-  feature?: "rewrite" | "summarize" | "translate" | "restructure";
+  feature?: AssistantFeature;
   limit?: number;
 }) {
   const search = new URLSearchParams();
@@ -215,13 +323,16 @@ export function listAssistantRuns(params?: {
 }
 
 export function requestSuggestion(payload: {
-  feature: "rewrite" | "summarize" | "translate" | "restructure";
+  feature: AssistantFeature;
   selected_text: string;
   surrounding_context: string;
   target_language?: string;
   draft_id?: number;
   selection_start?: number;
   selection_end?: number;
+  tone?: string;
+  output_length?: string;
+  custom_prompt?: string;
 }) {
   return apiRequest<AssistantSuggestResponse>("/assistant/suggest", {
     method: "POST",
@@ -232,7 +343,7 @@ export function requestSuggestion(payload: {
 export function updateAssistantDecision(
   runId: number,
   payload: {
-    decision: "pending" | "accepted" | "rejected" | "partial";
+    decision: "pending" | "accepted" | "rejected" | "partial" | "canceled";
     applied_excerpt?: string;
   },
 ) {
@@ -240,4 +351,77 @@ export function updateAssistantDecision(
     method: "PATCH",
     body: payload,
   });
+}
+
+export function cancelAssistantRun(runId: number) {
+  return apiRequest<{ status: string; run_id: number }>(`/assistant/runs/${runId}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function listShareLinks(draftId: number) {
+  return apiRequest<ShareLinkRecord[]>(`/drafts/${draftId}/share-links`);
+}
+
+export function createShareLink(
+  draftId: number,
+  payload: { role: UserRole; access_mode: "authenticated" | "public"; expires_at?: string | null },
+) {
+  return apiRequest<ShareLinkRecord>(`/drafts/${draftId}/share-links`, {
+    method: "POST",
+    body: payload,
+  });
+}
+
+export function revokeShareLink(draftId: number, linkId: number) {
+  return apiRequest<void>(`/drafts/${draftId}/share-links/${linkId}`, {
+    method: "DELETE",
+  });
+}
+
+export function resolveShareLink(token: string) {
+  return apiRequest<ShareResolveRecord>(`/share/${token}/resolve`);
+}
+
+export async function login(payload: { login: string; password: string }) {
+  const tokens = await apiRequest<AuthTokenRecord>("/auth/login", {
+    method: "POST",
+    body: payload,
+    skipAuthRefresh: true,
+  });
+  setAuthTokens(tokens);
+  return tokens;
+}
+
+export async function register(payload: {
+  email: string;
+  username: string;
+  display_name: string;
+  password: string;
+}) {
+  const tokens = await apiRequest<AuthTokenRecord>("/auth/register", {
+    method: "POST",
+    body: payload,
+    skipAuthRefresh: true,
+  });
+  setAuthTokens(tokens);
+  return tokens;
+}
+
+export async function logout() {
+  const refreshToken = getRefreshToken();
+  if (!refreshToken) {
+    clearAuthTokens();
+    return;
+  }
+  await apiRequest<void>("/auth/logout", {
+    method: "POST",
+    body: { refresh_token: refreshToken },
+    skipAuthRefresh: true,
+  }).catch(() => undefined);
+  clearAuthTokens();
+}
+
+export function whoAmI() {
+  return apiRequest<MemberRecord>("/auth/me");
 }
