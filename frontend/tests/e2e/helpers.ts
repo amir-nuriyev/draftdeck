@@ -3,32 +3,25 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 export const apiBaseUrl =
   process.env.PLAYWRIGHT_API_BASE_URL ?? "http://127.0.0.1:8000/api";
 
-export type DemoRole = "owner" | "editor" | "commenter" | "viewer";
+type DemoUser = "owner" | "editor" | "commenter" | "viewer";
 
-export async function setPersona(page: Page, role: DemoRole) {
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  await page.evaluate((nextRole) => {
-    window.localStorage.setItem("draftdeck-persona", nextRole);
-  }, role);
-}
+const credentials: Record<DemoUser, { login: string; password: string }> = {
+  owner: { login: "maya", password: "owner123" },
+  editor: { login: "omar", password: "editor123" },
+  commenter: { login: "irene", password: "comment123" },
+  viewer: { login: "nika", password: "viewer123" },
+};
 
-export async function openBoard(page: Page, role: DemoRole = "owner") {
-  await setPersona(page, role);
-  await page.goto("/", { waitUntil: "networkidle" });
-  await expect(page.getByTestId("session-summary")).toContainText("Session mode:");
-}
-
-export async function openDraft(
-  page: Page,
-  draftId: number,
-  role: DemoRole,
-  expectedTitle?: string,
-) {
-  await setPersona(page, role);
-  await page.goto(`/drafts/${draftId}`, { waitUntil: "networkidle" });
-  if (expectedTitle) {
-    await expect(page.getByRole("heading", { level: 1 })).toContainText(expectedTitle);
-  }
+export async function apiLogin(request: APIRequestContext, user: DemoUser = "owner") {
+  const response = await request.post(`${apiBaseUrl}/auth/login`, {
+    data: credentials[user],
+  });
+  expect(response.ok()).toBeTruthy();
+  const payload = await response.json();
+  return {
+    accessToken: payload.access_token as string,
+    refreshToken: payload.refresh_token as string,
+  };
 }
 
 export async function createDraft(
@@ -42,32 +35,38 @@ export async function createDraft(
     create_snapshot: boolean;
   }> = {},
 ) {
+  const { accessToken } = await apiLogin(request, "owner");
   const response = await request.post(`${apiBaseUrl}/drafts`, {
     data: {
       title: `Draft ${Date.now()}`,
       brief: "Playwright fixture draft",
-      content: "Initial DraftDeck content for browser tests.",
+      content: "<p>Initial DraftDeck content for browser tests.</p>",
       stage: "concept",
       accent: "ember",
       create_snapshot: true,
       ...overrides,
     },
-    headers: { "X-User-Id": "1" },
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   expect(response.ok()).toBeTruthy();
-  return (await response.json()) as {
+  return {
+    ...(await response.json()),
+    accessToken,
+  } as {
     id: number;
     title: string;
     brief: string;
     content: string;
     stage: string;
     accent: string;
+    accessToken: string;
   };
 }
 
 export async function deleteDraft(request: APIRequestContext, draftId: number) {
+  const { accessToken } = await apiLogin(request, "owner");
   await request.delete(`${apiBaseUrl}/drafts/${draftId}`, {
-    headers: { "X-User-Id": "1" },
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
 }
 
@@ -75,58 +74,61 @@ export async function shareDraft(
   request: APIRequestContext,
   draftId: number,
   memberId: number,
-  role: Exclude<DemoRole, "owner">,
+  role: "editor" | "commenter" | "viewer",
 ) {
+  const { accessToken } = await apiLogin(request, "owner");
   const response = await request.post(`${apiBaseUrl}/drafts/${draftId}/collaborators`, {
     data: {
       member_id: memberId,
       role,
     },
-    headers: { "X-User-Id": "1" },
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   expect(response.ok()).toBeTruthy();
 }
 
-export async function createSnapshotVersion(
+export async function createShareLink(
   request: APIRequestContext,
   draftId: number,
-  content: string,
-  snapshotLabel = "Changed version",
+  mode: "public" | "authenticated" = "public",
+  role: "viewer" | "commenter" | "editor" = "viewer",
 ) {
-  const response = await request.patch(`${apiBaseUrl}/drafts/${draftId}`, {
+  const { accessToken } = await apiLogin(request, "owner");
+  const response = await request.post(`${apiBaseUrl}/drafts/${draftId}/share-links`, {
     data: {
-      content,
-      create_snapshot: true,
-      snapshot_label: snapshotLabel,
+      access_mode: mode,
+      role,
     },
-    headers: { "X-User-Id": "1" },
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   expect(response.ok()).toBeTruthy();
+  return response.json() as Promise<{ id: number; token: string }>;
 }
 
-export async function listSnapshots(request: APIRequestContext, draftId: number) {
-  const response = await request.get(`${apiBaseUrl}/drafts/${draftId}/snapshots`, {
-    headers: { "X-User-Id": "1" },
-  });
-  expect(response.ok()).toBeTruthy();
-  return (await response.json()) as Array<{
-    id: number;
-    label: string | null;
-    content: string;
-    created_at: string;
-  }>;
+export async function loginViaUi(page: Page, user: DemoUser = "owner") {
+  await page.goto("/", { waitUntil: "networkidle" });
+  await page.getByPlaceholder("Email or username").fill(credentials[user].login);
+  await page.getByPlaceholder("Password").fill(credentials[user].password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByText(/Signed in as/i)).toBeVisible();
 }
 
-export async function selectEditorRange(page: Page, start: number, end: number) {
-  await page.getByLabel("Editor").evaluate(
-    (node, range) => {
-      const editor = node as HTMLTextAreaElement;
-      editor.focus();
-      editor.selectionStart = range.start;
-      editor.selectionEnd = range.end;
-      editor.dispatchEvent(new Event("select", { bubbles: true }));
-      editor.dispatchEvent(new Event("keyup", { bubbles: true }));
-    },
-    { start, end },
-  );
+export async function openDraftAs(page: Page, draftId: number, user: DemoUser) {
+  await loginViaUi(page, user);
+  await page.goto(`/drafts/${draftId}`, { waitUntil: "networkidle" });
+  await expect(page.getByTestId("connection-status")).toHaveText("Live");
+}
+
+export async function replaceEditorContent(page: Page, value: string) {
+  const editor = page.locator(".ProseMirror").first();
+  await editor.click();
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type(value);
+}
+
+export async function selectAllInEditor(page: Page) {
+  const editor = page.locator(".ProseMirror").first();
+  await editor.click();
+  await page.keyboard.press("Control+A");
 }

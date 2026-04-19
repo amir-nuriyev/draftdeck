@@ -24,14 +24,16 @@ export default defineConfig({
   outputDir: "./test-results",
   webServer: [
     {
-      command: ". .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 8000",
+      command:
+        "rm -f ./data/playwright.db && . .venv/bin/activate && uvicorn app.main:app --host 127.0.0.1 --port 8000",
       cwd: path.join(__dirname, "../backend"),
       env: {
         ...process.env,
+        DATABASE_URL: "sqlite:///./data/playwright.db",
         LLM_MOCK: "true",
         PYTHONUNBUFFERED: "1",
       },
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000,
       url: `${apiBaseUrl}/health`,
     },
@@ -43,7 +45,7 @@ export default defineConfig({
         NEXT_PUBLIC_API_BASE_URL: apiBaseUrl,
         NEXT_PUBLIC_WS_BASE_URL: wsBaseUrl,
       },
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000,
       url: frontendBaseUrl,
     },

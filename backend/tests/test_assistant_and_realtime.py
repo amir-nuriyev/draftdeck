@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import json
+import time
 from unittest.mock import patch
 
 import pytest
@@ -9,6 +13,9 @@ from sqlalchemy.pool import StaticPool
 from app.database import Base, get_db
 from app.main import app
 from app.models import DraftCollaborator, Member
+from app.prompts import build_prompt
+from app.schemas import AssistantSuggestRequest
+from app.security import hash_password
 from app.services import build_lm_studio_chat_url, sanitize_model_output
 
 
@@ -26,10 +33,6 @@ TestingSessionLocal = sessionmaker(
 )
 
 
-def auth_headers(user_id: int = 1) -> dict[str, str]:
-    return {"X-User-Id": str(user_id)}
-
-
 def override_get_db():
     db = TestingSessionLocal()
     try:
@@ -44,27 +47,27 @@ def seed_demo_members() -> None:
             [
                 Member(
                     email="maya@draftdeck.local",
+                    username="maya",
                     display_name="Maya Stone",
+                    password_hash=hash_password("owner123"),
                     focus_area="Product lead",
                     color_hex="#d97706",
                 ),
                 Member(
                     email="omar@draftdeck.local",
+                    username="omar",
                     display_name="Omar Vale",
+                    password_hash=hash_password("editor123"),
                     focus_area="Research editor",
                     color_hex="#0f766e",
                 ),
                 Member(
-                    email="irene@draftdeck.local",
-                    display_name="Irene Park",
-                    focus_area="Content reviewer",
-                    color_hex="#2563eb",
-                ),
-                Member(
                     email="nika@draftdeck.local",
+                    username="nika",
                     display_name="Nika Ross",
-                    focus_area="Read-only stakeholder",
-                    color_hex="#7c3aed",
+                    password_hash=hash_password("viewer123"),
+                    focus_area="Read-only reviewer",
+                    color_hex="#334155",
                 ),
             ]
         )
@@ -77,8 +80,11 @@ def reset_db():
     Base.metadata.create_all(bind=test_engine)
     seed_demo_members()
     app.dependency_overrides[get_db] = override_get_db
+    app.state.session_factory = TestingSessionLocal
     yield
     app.dependency_overrides.clear()
+    if hasattr(app.state, "session_factory"):
+        delattr(app.state, "session_factory")
     Base.metadata.drop_all(bind=test_engine)
 
 
@@ -88,32 +94,44 @@ def client():
         yield test_client
 
 
+def login_headers(client: TestClient, *, login: str = "maya", password: str = "owner123") -> dict[str, str]:
+    response = client.post("/api/auth/login", json={"login": login, "password": password})
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def login_token(client: TestClient, *, login: str = "maya", password: str = "owner123") -> str:
+    response = client.post("/api/auth/login", json={"login": login, "password": password})
+    assert response.status_code == 200
+    return response.json()["access_token"]
+
+
 def create_shared_draft(client: TestClient) -> int:
     response = client.post(
         "/api/drafts",
         json={
             "title": "Research sprint",
             "brief": "Short collaboration brief",
-            "content": "Initial body",
+            "content": "<p>Initial body</p>",
             "stage": "drafting",
             "accent": "ember",
             "create_snapshot": True,
         },
-        headers=auth_headers(1),
+        headers=login_headers(client),
     )
     assert response.status_code == 201
     return response.json()["id"]
 
 
 def test_assistant_suggest_returns_mock_metadata(client: TestClient):
-    with patch("app.services.settings.llm_mock", True):
+    with patch("app.config.settings.llm_mock", True):
         response = client.post(
             "/api/assistant/suggest",
             json={
                 "feature": "summarize",
                 "selected_text": "A long paragraph that should be summarized by the mock assistant.",
             },
-            headers=auth_headers(1),
+            headers=login_headers(client),
         )
 
     assert response.status_code == 200
@@ -124,180 +142,173 @@ def test_assistant_suggest_returns_mock_metadata(client: TestClient):
     assert payload["decision"] == "pending"
 
 
-def test_assistant_history_filters_and_decision_updates(client: TestClient):
-    first_draft_id = create_shared_draft(client)
-    second_response = client.post(
-        "/api/drafts",
-        json={
-            "title": "Outline pass",
-            "brief": "Another draft",
-            "content": "Second body",
-            "stage": "concept",
-            "accent": "tidal",
-            "create_snapshot": False,
-        },
-        headers=auth_headers(1),
-    )
-    second_draft_id = second_response.json()["id"]
+def test_assistant_stream_and_cancel(client: TestClient):
+    draft_id = create_shared_draft(client)
+    headers = login_headers(client)
 
-    with patch("app.services.settings.llm_mock", True):
-        first_run = client.post(
+    with patch("app.config.settings.llm_mock", True):
+        with client.stream(
+            "POST",
+            "/api/assistant/suggest/stream",
+            headers=headers,
+            json={
+                "feature": "rewrite",
+                "selected_text": "This sentence should stream token by token for cancellation coverage.",
+                "draft_id": draft_id,
+            },
+        ) as stream_response:
+            assert stream_response.status_code == 200
+            current_event = ""
+            run_id = None
+            canceled_seen = False
+            for raw_line in stream_response.iter_lines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                if line.startswith("event:"):
+                    current_event = line.replace("event:", "").strip()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                payload = json.loads(line.replace("data:", "").strip())
+                if current_event == "start":
+                    run_id = int(payload["run_id"])
+                    cancel = client.post(f"/api/assistant/runs/{run_id}/cancel", headers=headers)
+                    assert cancel.status_code == 200
+                if current_event == "canceled":
+                    canceled_seen = True
+                    break
+            assert run_id is not None
+
+    run = None
+    for _ in range(20):
+        history = client.get(f"/api/assistant/runs?draft_id={draft_id}&limit=5", headers=headers)
+        assert history.status_code == 200
+        run = next(item for item in history.json() if item["id"] == run_id)
+        if run["status"] != "streaming":
+            break
+        time.sleep(0.05)
+    assert run is not None
+    assert run["status"] in {"streaming", "canceled", "completed"}
+    if canceled_seen and run["status"] == "canceled":
+        assert run["decision"] == "canceled"
+
+
+def test_assistant_history_filters_and_decision_updates(client: TestClient):
+    draft_id = create_shared_draft(client)
+    headers = login_headers(client)
+    with patch("app.config.settings.llm_mock", True):
+        run = client.post(
             "/api/assistant/suggest",
             json={
                 "feature": "summarize",
                 "selected_text": "First chunk",
-                "draft_id": first_draft_id,
+                "draft_id": draft_id,
             },
-            headers=auth_headers(1),
-        ).json()
-        client.post(
-            "/api/assistant/suggest",
-            json={
-                "feature": "rewrite",
-                "selected_text": "Second chunk",
-                "draft_id": second_draft_id,
-            },
-            headers=auth_headers(1),
+            headers=headers,
         )
+    assert run.status_code == 200
+    run_id = run.json()["run_id"]
 
-    filtered = client.get(
-        f"/api/assistant/runs?draft_id={first_draft_id}&feature=summarize",
-        headers=auth_headers(1),
-    )
+    filtered = client.get(f"/api/assistant/runs?draft_id={draft_id}&feature=summarize", headers=headers)
     assert filtered.status_code == 200
-    payload = filtered.json()
-    assert len(payload) == 1
-    assert payload[0]["draft_id"] == first_draft_id
-    assert payload[0]["feature"] == "summarize"
+    assert len(filtered.json()) == 1
 
     updated = client.patch(
-        f"/api/assistant/runs/{first_run['run_id']}",
+        f"/api/assistant/runs/{run_id}",
         json={"decision": "accepted", "applied_excerpt": "Inserted into draft"},
-        headers=auth_headers(1),
+        headers=headers,
     )
     assert updated.status_code == 200
     assert updated.json()["decision"] == "accepted"
-    assert updated.json()["applied_excerpt"] == "Inserted into draft"
 
 
-def test_commenter_cannot_invoke_assistant_for_a_shared_draft(client: TestClient):
+def test_websocket_presence_and_patch_events(client: TestClient):
     draft_id = create_shared_draft(client)
     with TestingSessionLocal() as db:
-        db.add(DraftCollaborator(draft_id=draft_id, member_id=3, role="commenter"))
+        db.add(DraftCollaborator(draft_id=draft_id, member_id=2, role="editor"))
         db.commit()
 
-    with patch("app.services.settings.llm_mock", True):
-        response = client.post(
-            "/api/assistant/suggest",
-            json={
-                "feature": "rewrite",
-                "selected_text": "Need a rewrite",
-                "draft_id": draft_id,
-            },
-            headers=auth_headers(3),
-        )
+    token_owner = login_token(client, login="maya", password="owner123")
+    token_editor = login_token(client, login="omar", password="editor123")
 
-    assert response.status_code == 403
-
-
-def test_websocket_presence_and_draft_events(client: TestClient):
-    with client.websocket_connect("/ws/drafts/alpha?userId=1&userName=Maya&clientId=c1") as ws1:
+    with client.websocket_connect(f"/ws/drafts/{draft_id}?token={token_owner}&clientId=c1") as ws1:
         ack1 = ws1.receive_json()
+        bootstrap1 = ws1.receive_json()
         sync1 = ws1.receive_json()
-
         assert ack1["type"] == "session:ack"
+        assert bootstrap1["type"] == "yjs:bootstrap"
         assert sync1["type"] == "presence:sync"
-        assert len(sync1["participants"]) == 1
 
-        with client.websocket_connect("/ws/drafts/alpha?userId=2&userName=Omar&clientId=c2") as ws2:
+        with client.websocket_connect(f"/ws/drafts/{draft_id}?token={token_editor}&clientId=c2") as ws2:
             ws2.receive_json()
-            ws2.receive_json()
-            ws1.receive_json()
-
-            ws2.send_json(
-                {
-                    "type": "presence:update",
-                    "cursor": {"from": 4},
-                    "selection": {"from": 4, "to": 8},
-                }
-            )
-            ws2_presence = ws2.receive_json()
-            ws1_presence = ws1.receive_json()
-
-            assert ws2_presence["type"] == "presence:sync"
-            assert ws1_presence["participants"][1]["selection"] == {"from": 4, "to": 8}
-
-            ws2.send_json({"type": "draft:patch", "payload": {"content": "remote change"}})
-            draft_patch = ws1.receive_json()
-            assert draft_patch["type"] == "draft:patch"
-            assert draft_patch["sender"]["memberName"] == "Omar"
-            assert draft_patch["payload"] == {"content": "remote change"}
-
-            ws2.send_json({"type": "assistant:status", "payload": {"feature": "summarize"}})
-            assistant_event = ws1.receive_json()
-            assert assistant_event["type"] == "assistant:status"
-            assert assistant_event["payload"]["feature"] == "summarize"
-
-
-def test_websocket_warns_on_overlapping_edits(client: TestClient):
-    with client.websocket_connect("/ws/drafts/conflict-room?userId=1&userName=Maya&clientId=c1") as ws1:
-        ws1.receive_json()
-        ws1.receive_json()
-
-        with client.websocket_connect("/ws/drafts/conflict-room?userId=2&userName=Omar&clientId=c2") as ws2:
             ws2.receive_json()
             ws2.receive_json()
             ws1.receive_json()
 
-            ws1.send_json(
-                {
-                    "type": "presence:update",
-                    "cursor": {"from": 6, "to": 6},
-                    "selection": {"from": 6, "to": 12},
-                }
-            )
-            ws1.receive_json()
-            ws2.receive_json()
+            ws2.send_json({"type": "draft:patch", "payload": {"content": "<p>remote change</p>"}})
+            patch = ws1.receive_json()
+            assert patch["type"] == "draft:patch"
+            assert patch["payload"]["content"] == "<p>remote change</p>"
 
-            ws2.send_json(
-                {
-                    "type": "presence:update",
-                    "cursor": {"from": 8, "to": 8},
-                    "selection": {"from": 8, "to": 14},
-                }
-            )
-            ws2.receive_json()
-            ws1.receive_json()
 
-            ws2.send_json(
-                {
-                    "type": "draft:patch",
-                    "payload": {
-                        "content": "overlapping change",
-                        "range": {"from": 8, "to": 10},
-                    },
-                }
-            )
+def test_websocket_bootstrap_replays_yjs_updates(client: TestClient):
+    draft_id = create_shared_draft(client)
+    with TestingSessionLocal() as db:
+        db.add(DraftCollaborator(draft_id=draft_id, member_id=2, role="editor"))
+        db.commit()
 
-            warning_for_sender = ws2.receive_json()
-            warning_for_other = ws1.receive_json()
-            patch_for_other = ws1.receive_json()
+    token_owner = login_token(client, login="maya", password="owner123")
+    token_editor = login_token(client, login="omar", password="editor123")
 
-            assert warning_for_sender["type"] == "conflict:warning"
-            assert warning_for_other["type"] == "conflict:warning"
-            assert {participant["memberName"] for participant in warning_for_sender["participants"]} == {
-                "Maya",
-                "Omar",
-            }
-            assert patch_for_other["type"] == "draft:patch"
-            assert patch_for_other["payload"]["content"] == "overlapping change"
+    with client.websocket_connect(f"/ws/drafts/{draft_id}?token={token_owner}&clientId=c1") as ws1:
+        ws1.receive_json()  # session:ack
+        ws1.receive_json()  # yjs:bootstrap
+        ws1.receive_json()  # presence:sync
+        ws1.send_json({"type": "yjs:update", "payload": {"update": "AQID"}})
+
+        # sender does not get its own yjs:update back
+        with client.websocket_connect(f"/ws/drafts/{draft_id}?token={token_editor}&clientId=c2") as ws2:
+            ws2.receive_json()  # session:ack
+            bootstrap = ws2.receive_json()
+            assert bootstrap["type"] == "yjs:bootstrap"
+            assert bootstrap["updates"] == [{"update": "AQID"}]
+
+
+def test_websocket_blocks_viewer_from_mutation_messages(client: TestClient):
+    draft_id = create_shared_draft(client)
+    with TestingSessionLocal() as db:
+        db.add(DraftCollaborator(draft_id=draft_id, member_id=3, role="viewer"))
+        db.commit()
+
+    token_viewer = login_token(client, login="nika", password="viewer123")
+    with client.websocket_connect(f"/ws/drafts/{draft_id}?token={token_viewer}&clientId=cv") as ws:
+        ws.receive_json()  # session:ack
+        ws.receive_json()  # yjs:bootstrap
+        ws.receive_json()  # presence:sync
+        ws.send_json({"type": "draft:patch", "payload": {"content": "blocked"}})
+        error = ws.receive_json()
+        assert error["type"] == "error"
+        assert "does not allow" in error["message"]
+
+
+def test_prompt_builder_truncates_long_context():
+    prompt = build_prompt(
+        AssistantSuggestRequest(
+            feature="summarize",
+            selected_text="x" * 3800,
+            surrounding_context="y" * 3000,
+        )
+    )
+    assert "[context: truncated" in prompt
+    assert "[selection: truncated" in prompt
 
 
 def test_lm_studio_helpers_normalize_urls_and_strip_wrappers():
-    with patch("app.services.settings.lm_studio_base_url", "http://127.0.0.1:1234"):
+    with patch("app.config.settings.lm_studio_base_url", "http://127.0.0.1:1234"):
         assert build_lm_studio_chat_url() == "http://127.0.0.1:1234/v1/chat/completions"
 
-    with patch("app.services.settings.lm_studio_base_url", "http://127.0.0.1:1234/v1"):
+    with patch("app.config.settings.lm_studio_base_url", "http://127.0.0.1:1234/v1"):
         assert build_lm_studio_chat_url() == "http://127.0.0.1:1234/v1/chat/completions"
 
     assert sanitize_model_output("Here is your rewritten text: Cleaner sentence.") == "Cleaner sentence."

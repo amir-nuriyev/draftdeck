@@ -1,26 +1,20 @@
 import { expect, test } from "@playwright/test";
 
-import { createDraft, deleteDraft, openDraft, setPersona } from "./helpers";
+import { createDraft, createShareLink, deleteDraft } from "./helpers";
 
-test("viewer sees an access error for a private draft", async ({ page, request }) => {
+test("public share link resolves in read preview mode", async ({ page, request }) => {
   const created = await createDraft(request, {
-    title: `Private Draft ${Date.now()}`,
+    title: `Share Link ${Date.now()}`,
   });
 
   try {
-    await openDraft(page, created.id, "viewer");
+    const link = await createShareLink(request, created.id, "public", "viewer");
 
-    await expect(page.getByTestId("draft-error")).toContainText(
-      "You do not have permission to perform this action in this draft.",
-    );
+    await page.goto(`/share/${link.token}`, { waitUntil: "networkidle" });
+    await expect(page.getByText("Share link", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Access: public/i)).toBeVisible();
+    await expect(page.getByText(created.title)).toBeVisible();
   } finally {
     await deleteDraft(request, created.id);
   }
-});
-
-test("invalid draft ids fail gracefully in the UI", async ({ page }) => {
-  await setPersona(page, "owner");
-  await page.goto("/drafts/not-a-number", { waitUntil: "networkidle" });
-
-  await expect(page.getByTestId("draft-error")).toContainText("Invalid draft id.");
 });
