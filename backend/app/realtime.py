@@ -23,6 +23,7 @@ class ConnectionState:
 class ConnectionManager:
     def __init__(self) -> None:
         self._rooms: dict[str, dict[str, ConnectionState]] = defaultdict(dict)
+        self._yjs_updates: dict[str, list[dict[str, str]]] = defaultdict(list)
 
     async def connect(
         self,
@@ -50,6 +51,7 @@ class ConnectionManager:
         connection = room.pop(client_id, None)
         if not room:
             self._rooms.pop(room_id, None)
+            self._yjs_updates.pop(room_id, None)
         return connection.presence if connection else None
 
     async def send_to_client(self, websocket: WebSocket, payload: dict[str, Any]) -> None:
@@ -187,6 +189,18 @@ class ConnectionManager:
             }
             for connection in self._rooms.get(room_id, {}).values()
         ]
+
+    def record_yjs_update(self, room_id: str, payload: dict[str, Any]) -> None:
+        update = payload.get("update")
+        if not isinstance(update, str) or not update.strip():
+            return
+        history = self._yjs_updates[room_id]
+        history.append({"update": update})
+        if len(history) > 400:
+            del history[: len(history) - 400]
+
+    def get_yjs_bootstrap_updates(self, room_id: str) -> list[dict[str, str]]:
+        return list(self._yjs_updates.get(room_id, []))
 
 
 manager = ConnectionManager()

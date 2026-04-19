@@ -1,11 +1,19 @@
-from dataclasses import dataclass
-import re
-from textwrap import shorten
+from __future__ import annotations
 
-import httpx
-from fastapi import HTTPException, status
+import asyncio
+import re
+from dataclasses import dataclass
+from typing import AsyncIterator
 
 from app.config import settings
+from app.llm_provider import (
+    LLMResult,
+    build_lm_studio_chat_url,
+    generate_completion,
+    model_for_feature,
+    stream_completion,
+)
+from app.prompts import build_prompt
 from app.schemas import AssistantSuggestRequest
 
 
@@ -26,56 +34,6 @@ LEADING_WRAPPER_PATTERNS = [
     r"^(?:concise\s+summary\s+of\s+the\s+selected\s+text\s*:\s*)",
     r"^(?:result|output)\s*:\s*",
 ]
-
-
-def model_for_feature(feature: str) -> str:
-    if feature in {"rewrite", "restructure"}:
-        return settings.llm_deep_model
-    return settings.llm_fast_model
-
-
-def temperature_for_feature(feature: str) -> float:
-    return 0.15 if feature == "summarize" else 0.3
-
-
-def build_prompt(payload: AssistantSuggestRequest) -> str:
-    task = {
-        "rewrite": (
-            "Rewrite the selected text so it reads like a tighter, more polished draft. "
-            "Preserve the original intent and concrete facts."
-        ),
-        "summarize": "Summarize the selected text into a compact overview with the essential ideas only.",
-        "translate": (
-            f"Translate the selected text into {payload.target_language or 'the requested language'} "
-            "while preserving tone and factual meaning."
-        ),
-        "restructure": (
-            "Restructure the selected text into a clearer flow. "
-            "You may reorder clauses or convert it into a compact outline if that improves readability."
-        ),
-    }[payload.feature]
-
-    context_block = payload.surrounding_context.strip() or "No surrounding context supplied."
-
-    return (
-        "DraftDeck editorial request\n"
-        f"Task:\n{task}\n\n"
-        "Rules:\n"
-        "- Return only the transformed text.\n"
-        "- Do not add titles, labels, markdown fences, or explanations.\n"
-        "- Keep names, numbers, and domain facts intact unless the request is translation.\n\n"
-        f"Surrounding context:\n{context_block}\n\n"
-        f"Selected text:\n{payload.selected_text}\n"
-    )
-
-
-def build_lm_studio_chat_url() -> str:
-    base_url = settings.lm_studio_base_url.rstrip("/")
-    if base_url.endswith("/chat/completions"):
-        return base_url
-    if base_url.endswith("/v1"):
-        return f"{base_url}/chat/completions"
-    return f"{base_url}/v1/chat/completions"
 
 
 def sanitize_model_output(content: str) -> str:
@@ -114,105 +72,44 @@ def sanitize_model_output(content: str) -> str:
     return cleaned.strip()
 
 
+def build_prompt_text(payload: AssistantSuggestRequest) -> str:
+    return build_prompt(payload)
+
+
 async def generate_ai_suggestion(payload: AssistantSuggestRequest) -> AIResult:
-    prompt = build_prompt(payload)
-    chosen_model = model_for_feature(payload.feature)
-
-    if settings.llm_mock:
-        prefix = {
-            "rewrite": "Polished pass",
-            "summarize": "Brief summary",
-            "translate": f"Translation to {payload.target_language or 'the target language'}",
-            "restructure": "Restructured outline",
-        }[payload.feature]
-        mock_response = f"{prefix}: {shorten(payload.selected_text, width=150, placeholder='...')}"
-        return AIResult(
-            prompt=prompt,
-            output_text=mock_response,
-            model_name=f"mock-{payload.feature}",
-            provider="mock",
-            mocked=True,
-        )
-
-    request_body = {
-        "model": chosen_model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are DraftDeck's editorial copilot. "
-                    "Return only the requested resulting text. "
-                    "Do not add introductions, labels, explanations, quotation marks, bullet points, or markdown fences."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": temperature_for_feature(payload.feature),
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=settings.lm_studio_timeout_seconds) as client:
-            response = await client.post(
-                build_lm_studio_chat_url(),
-                json=request_body,
-            )
-            response.raise_for_status()
-    except httpx.ConnectError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "Could not connect to LM Studio. Make sure the local server is running at "
-                f"{settings.lm_studio_base_url}."
-            ),
-        ) from exc
-    except httpx.TimeoutException as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "LM Studio did not respond before the timeout. Increase "
-                "`LM_STUDIO_TIMEOUT_SECONDS` or use a smaller local model."
-            ),
-        ) from exc
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(
-                "LM Studio returned an HTTP error "
-                f"({exc.response.status_code}). Check the loaded model name and server state."
-            ),
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="LM Studio request failed for an unexpected network reason.",
-        ) from exc
-
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="LM Studio returned invalid JSON.",
-        ) from exc
-
-    try:
-        content = data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="LM Studio returned an unexpected response payload.",
-        ) from exc
-    content = sanitize_model_output(content)
-    if not content:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="LM Studio returned an empty completion.",
-        )
-
+    prompt = build_prompt_text(payload)
+    result: LLMResult = await generate_completion(payload, prompt)
+    output = sanitize_model_output(result.output_text)
     return AIResult(
         prompt=prompt,
-        output_text=content,
-        model_name=chosen_model,
-        provider="lm-studio",
-        mocked=False,
+        output_text=output,
+        model_name=result.model_name,
+        provider=result.provider,
+        mocked=result.mocked,
     )
+
+
+async def stream_ai_suggestion(
+    payload: AssistantSuggestRequest,
+    cancel_event: asyncio.Event,
+) -> tuple[str, str, str, bool, AsyncIterator[str]]:
+    prompt = build_prompt_text(payload)
+    model_name = f"mock-{payload.feature}" if settings.llm_mock else model_for_feature(payload.feature)
+    provider = "mock" if settings.llm_mock else "lm-studio"
+    mocked = settings.llm_mock
+
+    async def iterator() -> AsyncIterator[str]:
+        async for chunk in stream_completion(payload, prompt, cancel_event):
+            yield chunk
+
+    return prompt, model_name, provider, mocked, iterator()
+
+
+__all__ = [
+    "AIResult",
+    "build_lm_studio_chat_url",
+    "build_prompt_text",
+    "generate_ai_suggestion",
+    "sanitize_model_output",
+    "stream_ai_suggestion",
+]

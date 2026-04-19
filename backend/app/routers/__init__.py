@@ -1,4 +1,4 @@
 """API routers."""
-from . import assistant, drafts, members, session, studio
+from . import assistant, auth, drafts, members, session, share, studio
 
-__all__ = ["assistant", "drafts", "members", "session", "studio"]
+__all__ = ["assistant", "auth", "drafts", "members", "session", "share", "studio"]

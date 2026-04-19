@@ -1,11 +1,28 @@
+from __future__ import annotations
+
+from secrets import token_urlsafe
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import build_brief, get_current_member, get_draft_role, require_draft_role
-from app.models import Draft, DraftCollaborator, DraftSnapshot, Member
+from app.deps import (
+    build_brief,
+    get_current_member,
+    get_draft_role,
+    require_draft_role,
+    strip_rich_text,
+)
+from app.models import (
+    Draft,
+    DraftCollaborator,
+    DraftSnapshot,
+    DraftVersion,
+    Member,
+    ShareLink,
+)
 from app.schemas import (
     CollaboratorCreate,
     CollaboratorRead,
@@ -13,6 +30,8 @@ from app.schemas import (
     DraftRead,
     DraftSummaryRead,
     DraftUpdate,
+    ShareLinkCreate,
+    ShareLinkRead,
     SnapshotCreate,
     SnapshotRead,
 )
@@ -52,6 +71,7 @@ def serialize_draft(draft: Draft, my_role: str) -> DraftRead:
         title=draft.title,
         brief=draft.brief,
         content=draft.content,
+        plain_content=draft.plain_content,
         stage=draft.stage,
         accent=draft.accent,
         owner_id=draft.owner_id,
@@ -91,9 +111,14 @@ def serialize_collaborator(collaborator: DraftCollaborator) -> CollaboratorRead:
         role=collaborator.role,
         display_name=member.display_name if member is not None else "Unknown member",
         email=member.email if member is not None else "",
+        username=member.username if member is not None else "",
         focus_area=member.focus_area if member is not None else "",
         color_hex=member.color_hex if member is not None else "#000000",
     )
+
+
+def serialize_share_link(link: ShareLink) -> ShareLinkRead:
+    return ShareLinkRead.model_validate(link)
 
 
 def safe_export_filename(title: str, export_format: str) -> str:
@@ -105,7 +130,27 @@ def safe_export_filename(title: str, export_format: str) -> str:
     return f"{stem}.{export_format}"
 
 
-@router.get("", response_model=list[DraftSummaryRead])
+def add_draft_version(
+    db: Session,
+    draft: Draft,
+    *,
+    member_id: int | None,
+    reason: str,
+    label: str | None = None,
+) -> None:
+    db.add(
+        DraftVersion(
+            draft_id=draft.id,
+            created_by_member_id=member_id,
+            reason=reason,
+            label=label,
+            content=draft.content,
+            plain_content=draft.plain_content,
+        )
+    )
+
+
+@router.get("", response_model=list[DraftSummaryRead], summary="List accessible drafts")
 def list_drafts(
     db: Session = Depends(get_db),
     current_member: Member = Depends(get_current_member),
@@ -117,22 +162,31 @@ def list_drafts(
     ]
 
 
-@router.post("", response_model=DraftRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=DraftRead, status_code=status.HTTP_201_CREATED, summary="Create draft")
 def create_draft(
     payload: DraftCreate,
     db: Session = Depends(get_db),
     current_member: Member = Depends(get_current_member),
 ):
+    plain_content = strip_rich_text(payload.content)
     draft = Draft(
         title=payload.title,
-        brief=payload.brief.strip() or build_brief(payload.content, payload.title),
+        brief=payload.brief.strip() or build_brief(plain_content, payload.title),
         content=payload.content,
+        plain_content=plain_content,
         stage=payload.stage,
         accent=payload.accent,
         owner_id=current_member.id,
     )
     db.add(draft)
     db.flush()
+    add_draft_version(
+        db,
+        draft,
+        member_id=current_member.id,
+        reason="created",
+        label="Initial draft",
+    )
 
     if payload.create_snapshot:
         db.add(
@@ -140,6 +194,7 @@ def create_draft(
                 draft_id=draft.id,
                 label="Kickoff snapshot",
                 content=draft.content,
+                plain_content=draft.plain_content,
             )
         )
 
@@ -148,7 +203,7 @@ def create_draft(
     return serialize_draft(draft, "owner")
 
 
-@router.get("/{draft_id}", response_model=DraftRead)
+@router.get("/{draft_id}", response_model=DraftRead, summary="Get draft")
 def get_draft(
     draft_id: int,
     db: Session = Depends(get_db),
@@ -164,7 +219,7 @@ def get_draft(
     return serialize_draft(draft, my_role)
 
 
-@router.patch("/{draft_id}", response_model=DraftRead)
+@router.patch("/{draft_id}", response_model=DraftRead, summary="Update draft")
 def update_draft(
     draft_id: int,
     payload: DraftUpdate,
@@ -177,16 +232,17 @@ def update_draft(
     if payload.title is not None:
         draft.title = payload.title
     if payload.brief is not None:
-        draft.brief = payload.brief.strip() or build_brief(draft.content, draft.title)
+        draft.brief = payload.brief.strip()
     if payload.content is not None:
         draft.content = payload.content
+        draft.plain_content = strip_rich_text(payload.content)
     if payload.stage is not None:
         draft.stage = payload.stage
     if payload.accent is not None:
         draft.accent = payload.accent
 
-    if payload.content is not None and payload.brief is None and not draft.brief.strip():
-        draft.brief = build_brief(payload.content, draft.title)
+    if not draft.brief.strip():
+        draft.brief = build_brief(draft.plain_content, draft.title)
 
     if payload.create_snapshot:
         db.add(
@@ -194,16 +250,24 @@ def update_draft(
                 draft_id=draft.id,
                 label=payload.snapshot_label or "Manual checkpoint",
                 content=draft.content,
+                plain_content=draft.plain_content,
             )
         )
 
+    add_draft_version(
+        db,
+        draft,
+        member_id=current_member.id,
+        reason="updated",
+        label=payload.snapshot_label,
+    )
     db.add(draft)
     db.commit()
     db.refresh(draft)
     return serialize_draft(draft, my_role)
 
 
-@router.delete("/{draft_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{draft_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete draft")
 def delete_draft(
     draft_id: int,
     db: Session = Depends(get_db),
@@ -215,7 +279,7 @@ def delete_draft(
     db.commit()
 
 
-@router.get("/{draft_id}/snapshots", response_model=list[SnapshotRead])
+@router.get("/{draft_id}/snapshots", response_model=list[SnapshotRead], summary="List snapshots")
 def list_snapshots(
     draft_id: int,
     db: Session = Depends(get_db),
@@ -240,6 +304,7 @@ def list_snapshots(
     "/{draft_id}/snapshots",
     response_model=SnapshotRead,
     status_code=status.HTTP_201_CREATED,
+    summary="Create snapshot",
 )
 def create_snapshot(
     draft_id: int,
@@ -254,14 +319,22 @@ def create_snapshot(
         draft_id=draft.id,
         label=payload.label or "Manual checkpoint",
         content=draft.content,
+        plain_content=draft.plain_content,
     )
     db.add(snapshot)
+    add_draft_version(
+        db,
+        draft,
+        member_id=current_member.id,
+        reason="snapshot",
+        label=snapshot.label,
+    )
     db.commit()
     db.refresh(snapshot)
     return serialize_snapshot(snapshot)
 
 
-@router.post("/{draft_id}/snapshots/{snapshot_id}/restore", response_model=DraftRead)
+@router.post("/{draft_id}/snapshots/{snapshot_id}/restore", response_model=DraftRead, summary="Restore snapshot")
 def restore_snapshot(
     draft_id: int,
     snapshot_id: int,
@@ -284,13 +357,22 @@ def restore_snapshot(
         )
 
     draft.content = snapshot.content
-    draft.brief = build_brief(snapshot.content, draft.title)
+    draft.plain_content = snapshot.plain_content
+    draft.brief = build_brief(draft.plain_content, draft.title)
     db.add(
         DraftSnapshot(
             draft_id=draft.id,
             label=f"Restored from snapshot {snapshot.id}",
             content=draft.content,
+            plain_content=draft.plain_content,
         )
+    )
+    add_draft_version(
+        db,
+        draft,
+        member_id=current_member.id,
+        reason="restore",
+        label=f"Restored snapshot {snapshot.id}",
     )
     db.add(draft)
     db.commit()
@@ -298,7 +380,7 @@ def restore_snapshot(
     return serialize_draft(draft, "owner")
 
 
-@router.get("/{draft_id}/collaborators", response_model=list[CollaboratorRead])
+@router.get("/{draft_id}/collaborators", response_model=list[CollaboratorRead], summary="List collaborators")
 def list_collaborators(
     draft_id: int,
     db: Session = Depends(get_db),
@@ -323,6 +405,7 @@ def list_collaborators(
     "/{draft_id}/collaborators",
     response_model=CollaboratorRead,
     status_code=status.HTTP_201_CREATED,
+    summary="Share draft with collaborator",
 )
 def upsert_collaborator(
     draft_id: int,
@@ -369,7 +452,7 @@ def upsert_collaborator(
     return serialize_collaborator(collaborator)
 
 
-@router.delete("/{draft_id}/collaborators/{member_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{draft_id}/collaborators/{member_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Remove collaborator")
 def delete_collaborator(
     draft_id: int,
     member_id: int,
@@ -401,7 +484,76 @@ def delete_collaborator(
     db.commit()
 
 
-@router.get("/{draft_id}/export")
+@router.get("/{draft_id}/share-links", response_model=list[ShareLinkRead], summary="List share links")
+def list_share_links(
+    draft_id: int,
+    db: Session = Depends(get_db),
+    current_member: Member = Depends(get_current_member),
+):
+    draft = get_draft_or_404(draft_id, db)
+    require_draft_role(draft, current_member, db, {"owner"})
+    links = db.scalars(
+        select(ShareLink)
+        .where(ShareLink.draft_id == draft_id)
+        .order_by(ShareLink.created_at.desc(), ShareLink.id.desc())
+    ).all()
+    return [serialize_share_link(link) for link in links]
+
+
+@router.post(
+    "/{draft_id}/share-links",
+    response_model=ShareLinkRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create share-by-link rule",
+)
+def create_share_link(
+    draft_id: int,
+    payload: ShareLinkCreate,
+    db: Session = Depends(get_db),
+    current_member: Member = Depends(get_current_member),
+):
+    draft = get_draft_or_404(draft_id, db)
+    require_draft_role(draft, current_member, db, {"owner"})
+
+    role = payload.role
+    if payload.access_mode == "public" and role in {"owner", "editor"}:
+        role = "viewer"
+
+    link = ShareLink(
+        draft_id=draft_id,
+        created_by_member_id=current_member.id,
+        token=token_urlsafe(32),
+        role=role,
+        access_mode=payload.access_mode,
+        expires_at=payload.expires_at,
+    )
+    db.add(link)
+    db.commit()
+    db.refresh(link)
+    return serialize_share_link(link)
+
+
+@router.delete("/{draft_id}/share-links/{link_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Revoke share link")
+def revoke_share_link(
+    draft_id: int,
+    link_id: int,
+    db: Session = Depends(get_db),
+    current_member: Member = Depends(get_current_member),
+):
+    draft = get_draft_or_404(draft_id, db)
+    require_draft_role(draft, current_member, db, {"owner"})
+    link = db.get(ShareLink, link_id)
+    if link is None or link.draft_id != draft_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share link not found.")
+    if link.revoked_at is None:
+        from app.security import utc_now
+
+        link.revoked_at = utc_now()
+        db.add(link)
+        db.commit()
+
+
+@router.get("/{draft_id}/export", summary="Export draft")
 def export_draft(
     draft_id: int,
     format: str = Query(default="md"),
@@ -431,6 +583,7 @@ def export_draft(
             "title": draft.title,
             "brief": draft.brief,
             "content": draft.content,
+            "plain_content": draft.plain_content,
             "stage": draft.stage,
             "accent": draft.accent,
             "created_at": draft.created_at.isoformat(),
@@ -441,7 +594,8 @@ def export_draft(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    body = draft.content if export_format == "txt" else f"# {draft.title}\n\n{draft.content}"
+    body_source = draft.plain_content if draft.plain_content.strip() else strip_rich_text(draft.content)
+    body = body_source if export_format == "txt" else f"# {draft.title}\n\n{body_source}"
     return PlainTextResponse(
         body,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
