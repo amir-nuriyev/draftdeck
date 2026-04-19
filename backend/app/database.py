@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, select
@@ -42,22 +44,28 @@ def ensure_local_schema() -> None:
         return
 
     inspector = inspect(engine)
-    members_columns = {
-        column["name"] for column in inspector.get_columns("members")
-    } if inspector.has_table("members") else set()
-    assistant_runs_columns = {
-        column["name"] for column in inspector.get_columns("assistant_runs")
-    } if inspector.has_table("assistant_runs") else set()
+    expected_tables = {
+        "members",
+        "refresh_sessions",
+        "drafts",
+        "draft_versions",
+        "draft_collaborators",
+        "draft_snapshots",
+        "share_links",
+        "assistant_runs",
+    }
+    actual_tables = set(inspector.get_table_names())
 
-    schema_is_current = (
-        inspector.has_table("members")
-        and inspector.has_table("drafts")
-        and inspector.has_table("draft_collaborators")
-        and inspector.has_table("draft_snapshots")
-        and inspector.has_table("assistant_runs")
-        and "display_name" in members_columns
-        and "decision" in assistant_runs_columns
-    )
+    schema_is_current = expected_tables.issubset(actual_tables)
+    if schema_is_current and inspector.has_table("members") and inspector.has_table("assistant_runs"):
+        members_columns = {column["name"] for column in inspector.get_columns("members")}
+        run_columns = {column["name"] for column in inspector.get_columns("assistant_runs")}
+        schema_is_current = (
+            "username" in members_columns
+            and "password_hash" in members_columns
+            and "provider" in run_columns
+            and "prompt_text" in run_columns
+        )
 
     if schema_is_current:
         Base.metadata.create_all(bind=engine)
@@ -77,29 +85,38 @@ def get_db():
 
 def seed_demo_users() -> None:
     from app.models import Member
+    from app.security import hash_password
 
     demo_members = [
         {
             "email": "maya@draftdeck.local",
+            "username": "maya",
             "display_name": "Maya Stone",
+            "password": "owner123",
             "focus_area": "Product lead",
             "color_hex": "#d97706",
         },
         {
             "email": "omar@draftdeck.local",
+            "username": "omar",
             "display_name": "Omar Vale",
+            "password": "editor123",
             "focus_area": "Research editor",
             "color_hex": "#0f766e",
         },
         {
             "email": "irene@draftdeck.local",
+            "username": "irene",
             "display_name": "Irene Park",
+            "password": "comment123",
             "focus_area": "Content reviewer",
             "color_hex": "#2563eb",
         },
         {
             "email": "nika@draftdeck.local",
+            "username": "nika",
             "display_name": "Nika Ross",
+            "password": "viewer123",
             "focus_area": "Read-only stakeholder",
             "color_hex": "#7c3aed",
         },
@@ -111,5 +128,14 @@ def seed_demo_users() -> None:
             return
 
         for member in demo_members:
-            db.add(Member(**member))
+            db.add(
+                Member(
+                    email=member["email"],
+                    username=member["username"],
+                    display_name=member["display_name"],
+                    password_hash=hash_password(member["password"]),
+                    focus_area=member["focus_area"],
+                    color_hex=member["color_hex"],
+                )
+            )
         db.commit()

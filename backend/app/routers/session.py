@@ -31,7 +31,7 @@ def get_session(
             )
 
     return SessionRead(
-        auth_mode="demo-header",
+        auth_mode="jwt",
         member=current_member,
         draft_id=draft_id,
         draft_role=draft_role,

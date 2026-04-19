@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import Literal
 
@@ -5,19 +7,56 @@ from pydantic import BaseModel, Field
 
 
 RoleValue = Literal["owner", "editor", "commenter", "viewer"]
+AccessModeValue = Literal["authenticated", "public"]
 StageValue = Literal["concept", "drafting", "review"]
-AssistantFeatureValue = Literal["rewrite", "summarize", "translate", "restructure"]
-AssistantDecisionValue = Literal["pending", "accepted", "rejected", "partial"]
+AssistantFeatureValue = Literal[
+    "rewrite",
+    "summarize",
+    "translate",
+    "restructure",
+    "expand",
+    "grammar",
+    "custom",
+]
+AssistantDecisionValue = Literal["pending", "accepted", "rejected", "partial", "canceled"]
 
 
 class MemberRead(BaseModel):
     id: int
     email: str
+    username: str
     display_name: str
     focus_area: str
     color_hex: str
 
     model_config = {"from_attributes": True}
+
+
+class AuthRegisterRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=200)
+    username: str = Field(min_length=3, max_length=80)
+    display_name: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AuthLoginRequest(BaseModel):
+    login: str = Field(min_length=3, max_length=200, description="Email or username.")
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AuthRefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=20)
+
+
+class AuthLogoutRequest(BaseModel):
+    refresh_token: str = Field(min_length=20)
+
+
+class AuthTokenRead(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: Literal["bearer"] = "bearer"
+    access_expires_in: int
 
 
 class SessionCapabilitiesRead(BaseModel):
@@ -31,7 +70,7 @@ class SessionCapabilitiesRead(BaseModel):
 
 
 class SessionRead(BaseModel):
-    auth_mode: Literal["demo-header"]
+    auth_mode: Literal["jwt"]
     member: MemberRead
     draft_id: int | None
     draft_role: RoleValue | None
@@ -72,8 +111,10 @@ class DraftSummaryRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+
 class DraftRead(DraftSummaryRead):
     content: str
+    plain_content: str
 
 
 class SnapshotCreate(BaseModel):
@@ -102,8 +143,34 @@ class CollaboratorRead(BaseModel):
     role: RoleValue
     display_name: str
     email: str
+    username: str
     focus_area: str
     color_hex: str
+
+
+class ShareLinkCreate(BaseModel):
+    role: RoleValue = "viewer"
+    access_mode: AccessModeValue = "authenticated"
+    expires_at: datetime | None = None
+
+
+class ShareLinkRead(BaseModel):
+    id: int
+    draft_id: int
+    role: RoleValue
+    access_mode: AccessModeValue
+    token: str
+    revoked_at: datetime | None
+    expires_at: datetime | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ShareResolveRead(BaseModel):
+    draft: DraftRead
+    granted_role: RoleValue
+    access_mode: AccessModeValue
 
 
 class AssistantSuggestRequest(BaseModel):
@@ -114,6 +181,9 @@ class AssistantSuggestRequest(BaseModel):
     draft_id: int | None = None
     selection_start: int | None = Field(default=None, ge=0)
     selection_end: int | None = Field(default=None, ge=0)
+    tone: str | None = Field(default=None, max_length=80)
+    output_length: str | None = Field(default=None, max_length=80)
+    custom_prompt: str | None = Field(default=None, max_length=2000)
 
 
 class AssistantSuggestResponse(BaseModel):
@@ -135,14 +205,17 @@ class AssistantRunRead(BaseModel):
     feature: AssistantFeatureValue
     selection_text: str
     context_excerpt: str
+    prompt_text: str
     result_text: str
     model_route: str
+    provider: str
     status: str
     decision: AssistantDecisionValue
     target_language: str | None
     selection_start: int | None
     selection_end: int | None
     applied_excerpt: str | None
+    canceled_at: datetime | None
     created_at: datetime
 
 
